@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Flappy BLE</title>
+  <link rel="stylesheet" href="./assets/style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <h1>Flappy BLE</h1>
+        <p class="subtitle">Fly, dodge, and control your Bluetooth device.</p>
+      </div>
+      <div class="device-bar">
+        <span id="deviceStatus" class="status disconnected">Disconnected</span>
+        <button id="connectBtn" class="secondary">Connect Bluetooth</button>
+        <button id="disconnectBtn" class="ghost" disabled>Disconnect</button>
+      </div>
+    </header>
+
+    <section id="sdkWarning" class="warning hidden">Open this module in iCreator.</section>
+
+    <section class="layout">
+      <div class="game-card">
+        <div class="canvas-wrap">
+          <canvas id="gameCanvas" width="900" height="520" aria-label="Flappy BLE game"></canvas>
+          <div id="overlay" class="overlay">
+            <div class="overlay-card">
+              <h2 id="overlayTitle">Ready?</h2>
+              <p id="overlayText">Connect Bluetooth, then start the game.</p>
+              <button id="startBtn" class="primary">Start Game</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <button id="upBtn" class="control-btn up" aria-label="Move up">↑ <span>UP</span></button>
+          <button id="downBtn" class="control-btn down" aria-label="Move down">↓ <span>DOWN</span></button>
+        </div>
+        <p class="hint">Keyboard: ↑ sends the Up command · ↓ sends the Down command</p>
+      </div>
+
+      <aside class="panel">
+        <div class="score-box">
+          <div><span>Score</span><strong id="score">0</strong></div>
+          <div><span>Best</span><strong id="best">0</strong></div>
+        </div>
+
+        <h2>BLE Commands</h2>
+        <p class="panel-note">Edit the text sent at each game event.</p>
+
+        <label>Game start
+          <input id="cmdStart" maxlength="80" value="moveup" />
+        </label>
+        <label>UP action
+          <input id="cmdUp" maxlength="80" value="left" />
+        </label>
+        <label>DOWN action
+          <input id="cmdDown" maxlength="80" value="right" />
+        </label>
+        <label>Game over
+          <input id="cmdStop" maxlength="80" value="stop" />
+        </label>
+        <button id="saveBtn" class="secondary wide">Save Commands</button>
+
+        <div class="log-wrap">
+          <div class="log-title"><span>Command log</span><button id="clearLogBtn" class="tiny">Clear</button></div>
+          <div id="commandLog" class="log"></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+  <script src="./assets/main.js"></script>
+</body>
+</html>
