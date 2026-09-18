@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BLE Lab</title>
+  <link rel="stylesheet" href="./assets/style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <h1>BLE Lab</h1>
+        <p class="muted" id="subtitle">iCreator shared BLE GATT debugging panel</p>
+      </div>
+      <div class="top-actions">
+        <span id="modeBadge" class="badge live">LIVE</span>
+        <button id="languageBtn" class="secondary">中文</button>
+        <button id="demoBtn" class="secondary">Enter Demo</button>
+      </div>
+    </header>
+
+    <section id="sdkNotice" class="notice hidden"></section>
+
+    <section class="meta-grid">
+      <div><span class="label">Project</span><strong id="projectName">—</strong></div>
+      <div><span class="label">Module</span><strong id="moduleVersion">BLE Lab 1.0.0</strong></div>
+      <div><span class="label">API</span><strong id="apiVersion">—</strong></div>
+      <div><span class="label">Platform</span><strong id="platform">—</strong></div>
+    </section>
+
+    <section class="status-card card">
+      <div class="card-title-row">
+        <h2 data-i18n="sharedState">Shared Device State</h2>
+        <span id="connectionBadge" class="badge neutral">DISCONNECTED</span>
+      </div>
+      <div class="status-grid">
+        <div><span class="label">Device</span><strong id="deviceName">—</strong></div>
+        <div><span class="label">Status</span><strong id="deviceStatus">—</strong></div>
+        <div><span class="label">Connection ID</span><code id="connectionId">—</code></div>
+        <div><span class="label">Operation</span><strong id="activity">Idle</strong></div>
+      </div>
+      <details>
+        <summary data-i18n="connectedGatt">Connected GATT configuration</summary>
+        <pre id="activeGatt">No active generic GATT configuration.</pre>
+      </details>
+    </section>
+
+    <div class="columns">
+      <section class="card">
+        <h2 data-i18n="connection">Connection</h2>
+        <p class="muted" data-i18n="uuidHint">Enter the UUIDs from your actual hardware specification. Unknown UUIDs are intentionally not prefilled.</p>
+
+        <label>Service UUID <input id="serviceUuid" autocomplete="off" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></label>
+        <label>Write UUID <input id="writeUuid" autocomplete="off" placeholder="optional" /></label>
+        <label>Notify UUID <input id="notifyUuid" autocomplete="off" placeholder="optional" /></label>
+        <label>Read UUID <input id="readUuid" autocomplete="off" placeholder="optional" /></label>
+        <label>Name prefix <input id="namePrefix" autocomplete="off" placeholder="optional" /></label>
+
+        <div class="form-row">
+          <label>Write mode
+            <select id="writeMode">
+              <option value="with-response">with-response</option>
+              <option value="without-response">without-response</option>
+            </select>
+          </label>
+          <label>maxWriteBytes
+            <input id="maxWriteBytes" type="number" min="1" max="512" value="20" />
+          </label>
+        </div>
+
+        <div class="button-row">
+          <button id="connectBtn">Connect</button>
+          <button id="disconnectBtn" class="danger">Disconnect</button>
+        </div>
+        <p id="connectionError" class="error"></p>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="send">Send</h2>
+        <div class="form-row">
+          <label>Mode
+            <select id="sendMode">
+              <option value="text">Text</option>
+              <option value="hex">HEX</option>
+            </select>
+          </label>
+          <label>Suffix
+            <select id="sendSuffix">
+              <option value="none">None</option>
+              <option value="lf">LF</option>
+              <option value="crlf">CRLF</option>
+            </select>
+          </label>
+        </div>
+        <label>Payload
+          <textarea id="sendInput" rows="6" placeholder="Text or space-separated HEX bytes"></textarea>
+        </label>
+        <div class="button-row">
+          <button id="sendBtn">Send</button>
+        </div>
+        <p id="sendError" class="error"></p>
+        <div class="mini-log">
+          <span class="label">Last sent</span>
+          <code id="lastSent">—</code>
+        </div>
+      </section>
+
+      <section class="card receive-card">
+        <div class="card-title-row">
+          <h2 data-i18n="receive">Receive</h2>
+          <div class="button-row compact">
+            <button id="readBtn" class="secondary">Read</button>
+            <button id="pauseBtn" class="secondary">Pause autoscroll</button>
+            <button id="clearReceiveBtn" class="secondary">Clear</button>
+          </div>
+        </div>
+        <p class="muted" data-i18n="receiveHint">Notifications are raw byte events. UTF-8 text is shown only as a convenience view.</p>
+        <div id="receiveLog" class="log" aria-live="polite"></div>
+        <p id="receiveError" class="error"></p>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="transfer">Packet Transfer</h2>
+        <p class="muted" data-i18n="packetHint">One HEX packet per line. Completion means transport finished, not that the device executed the data.</p>
+        <label>Packets
+          <textarea id="packetInput" rows="8" placeholder="01 02 03&#10;AA BB CC"></textarea>
+        </label>
+        <div class="form-row">
+          <label>intervalMs
+            <input id="intervalMs" type="number" min="0" max="1000" value="20" />
+          </label>
+          <div class="packet-summary">
+            <span><strong id="packetCount">0</strong> packets</span>
+            <span><strong id="packetBytes">0</strong> bytes</span>
+          </div>
+        </div>
+        <progress id="uploadProgress" max="100" value="0"></progress>
+        <div class="status-line">
+          <span id="uploadStatus">Idle</span>
+          <span id="uploadJob"></span>
+        </div>
+        <div class="button-row">
+          <button id="uploadBtn">Start transfer</button>
+          <button id="cancelUploadBtn" class="danger">Cancel</button>
+        </div>
+        <p class="warning" data-i18n="cancelWarning">Canceling an upload disconnects the shared device to stop queued writes.</p>
+        <p id="uploadError" class="error"></p>
+      </section>
+    </div>
+
+    <footer>
+      <span>BLE Lab 1.0.0</span>
+      <span>•</span>
+      <span id="footerMode">LIVE</span>
+    </footer>
+  </main>
+  <script src="./assets/main.js"></script>
+</body>
+</html>
