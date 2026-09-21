@@ -138,3 +138,18 @@ The module contains the real SDK upload and notification-readback implementation
 Static checks can verify release structure, permissions, local assets, syntax and the presence of the real upload/readback paths. A physical Crowbot was not available in the development environment, so real-device upload/readback comparison and motor/light behavior remain pending hardware validation.
 
 Do not interpret a successful transfer ACK as full hardware behavior certification.
+
+
+## Protocol mock verification
+
+A hardware-free protocol mock was run during v3 development for the required loop:
+
+1. edit a device action from right-motor speed 50 to 73
+2. generated source changes to `moveup_right(73)`
+3. upload captures `workspacePolicy: 'replace'` with the matching workspace snapshot
+4. the saved workspace JSON is fragmented and reassembled as simulated notification data
+5. the recovered workspace remains editable
+6. edit speed to 88 and re-upload
+7. generated source changes to `moveup_right(88)`
+
+The mock completed two uploads successfully. This verifies the module-side product/payload loop only; it is not physical BLE, firmware, motor, light, or host-container certification.
