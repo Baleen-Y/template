@@ -1,40 +1,86 @@
-# Flappy BLE
+# Flappy BLE Blockly — v2.0.0
 
-A Flappy Bird-style iCreator module with Bluetooth command output.
+A directly importable iCreator module that turns the Flappy-style game into a Blockly-programmable game.
 
-## Default event commands
+## What changed from v1
 
-- Game start: `moveup`
-- UP action: `left`
-- DOWN action: `right`
-- Game over / collision: `stop`
+The old version used four text inputs for fixed BLE commands. v2 keeps the same module ID (`flappy-ble`) so it can be installed as an update, but the game logic now lives in a real bundled Blockly workspace.
 
-The four text commands are editable in the module and persisted with iCreator SDK storage.
+The Blockly program can react to:
 
-## Bluetooth profile
+- game start
+- UP press
+- DOWN press
+- pipe passed
+- game over
 
-This release defaults to the verified iCreator compatibility profile:
+Actions can:
+
+- flap or dive the bird
+- send exact BLE text
+- change gravity
+- change pipe gap
+- change pipe speed
+- add/subtract score
+- wait
+- repeat nested actions
+- run nested actions based on score
+
+The starter blocks preserve the original behavior:
+
+- game start -> send `moveup`
+- UP -> flap + send `left`
+- DOWN -> dive + send `right`
+- game over -> send `stop`
+
+## Blockly runtime
+
+Blockly 13.3.0 is vendored locally at:
+
+`assets/vendor/blockly.min.js`
+
+No CDN is used by the installed module. The repository workflow `.github/workflows/vendor-flappy-blockly.yml` only exists to pin and copy the upstream runtime into the release directory during repository development.
+
+The runtime module itself has no external network dependency.
+
+## Workspace persistence
+
+The editable Blockly structure is stored with the iCreator SDK, not localStorage/IndexedDB.
+
+- `workspace.v2`: raw Blockly workspace JSON from `Blockly.serialization.workspaces.save`
+- `workspace.meta.v2`: local version/provenance metadata
+- `bestScore`: best game score
+
+At the start of every round the current workspace is frozen and loaded into a separate headless Blockly workspace. Later edits therefore affect the next round, not an already running round.
+
+## Bluetooth behavior
+
+The module uses the host-supported Blockly-compatible connection profile:
 
 `integem-crowbot-mqtt-v1`
 
-The host owns the device chooser and BLE connection. The module does **not** use `navigator.bluetooth`.
+It does not use `navigator.bluetooth`.
 
-If you need a different BLE device, change the connection code to `generic-ble-v1` only after obtaining the device's real service/characteristic UUIDs and write mode from its specification.
+The `send BLE command` block calls `sdk.device.send` with the exact text in the block. Each send refreshes the shared device state first. Failed or BUSY sends are shown in the log and are not silently replayed.
 
-## Usage
+The module does **not** upload a new Crowbot firmware callback. Blockly in this module programs the browser game's event logic and the commands it sends to an already compatible device. Therefore v2 does not claim that game-physics blocks change firmware behavior.
 
-1. Import the `flappy-ble` folder/ZIP in iCreator Modules.
-2. Allow requested device permissions.
-3. Click **Connect Bluetooth** and choose a compatible device.
-4. Click **Start Game**.
-5. Press the on-screen UP / DOWN buttons or keyboard arrow keys.
-6. Hitting a pipe or the floor ends the round and sends the stop command.
-7. Disconnect only with the explicit **Disconnect** button.
+## Import / update
 
-## Notes and limitations
+Import the `flappy-ble/` folder directly, or package it with the iCreator module packer if the host repository is available.
 
-- A successful GATT write means the command was sent; it does not prove the device executed the command.
-- The game never silently reconnects or replays a failed hardware command.
-- Closing the module does not disconnect the shared device.
-- No external network, CDN, WebSocket, WebUSB, Web Serial, or direct browser Bluetooth API is used.
-- Hardware execution was not tested by ChatGPT because no physical device is available in this environment.
+Because the manifest ID remains `flappy-ble` and the version is now `2.0.0`, it is intended to update the previous release.
+
+## Verification scope
+
+Repository/static checks can verify:
+
+- manifest shape and permissions
+- local asset references
+- JavaScript syntax
+- Blockly workspace serialization API presence in the vendored runtime
+- no runtime CDN/external network URL in the module release files
+
+Physical BLE behavior still requires a real compatible device. A successful GATT write is not proof that the device executed the command.
+
+No physical-device test is claimed here.
