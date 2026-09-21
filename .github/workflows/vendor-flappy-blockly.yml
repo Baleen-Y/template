@@ -32,3 +32,5 @@ jobs:
           git add flappy-ble/assets/vendor/blockly.min.js
           git commit -m "Vendor Blockly 13.3.0 for Flappy BLE"
           git push
+
+# workflow revision 2
