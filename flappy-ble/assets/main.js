@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.0.0';
+  const VERSION = '3.1.0';
   const WORKSPACE_KEY = 'deviceWorkspace.v3';
   const META_KEY = 'deviceWorkspace.meta.v3';
   const BACKUP_KEY = 'deviceWorkspace.backup.v3';
@@ -61,7 +61,9 @@
   let uploadJobId = null;
   let readbackActive = null;
   let bleLastSendAt = 0;
-  let bleQueue = Promise.resolve();
+  let gameSendInFlight = false;
+  let pendingGameEvent = null;
+  let urgentStopPending = false;
 
   const game = {
     mode: 'ready',
@@ -752,45 +754,81 @@
     readbackActive = null;
   }
 
-  function queueGameCommand(text) {
+  function queueGameCommand(text, options = {}) {
     const command = String(text);
-    const task = async () => {
-      if (!sdk || !visible || disposed) {
-        log('Game event "' + command + '" not sent: iCreator BLE unavailable.', 'err');
-        return false;
-      }
+    const urgent = options.urgent === true;
 
+    if (urgent) {
+      // STOP is a terminal game state. Drop any queued nonterminal event so
+      // stale gameplay commands cannot run after death.
+      pendingGameEvent = null;
+      urgentStopPending = true;
+      void pumpGameCommandQueue();
+      return;
+    }
+
+    if (urgentStopPending || game.mode === 'over') {
+      log('Dropped stale game event "' + command + '" because STOP is pending.', 'muted');
+      return;
+    }
+
+    // Normal game events are state notifications, not a command history.
+    // While a BLE write is in flight, keep only the newest pending event.
+    pendingGameEvent = command;
+    void pumpGameCommandQueue();
+  }
+
+  async function pumpGameCommandQueue() {
+    if (gameSendInFlight || disposed || !visible || !sdk) return;
+
+    let command = null;
+    let urgent = false;
+
+    if (urgentStopPending) {
+      urgentStopPending = false;
+      command = 'stop';
+      urgent = true;
+      pendingGameEvent = null;
+    } else if (pendingGameEvent) {
+      command = pendingGameEvent;
+      pendingGameEvent = null;
+    }
+
+    if (!command) return;
+
+    gameSendInFlight = true;
+    try {
       const waitMs = Math.max(0, BLE_MIN_INTERVAL - (performance.now() - bleLastSendAt));
       if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
 
-      try {
-        const state = await sdk.device.getState();
-        const target = state.currentDevice;
-        if (!target) {
-          log('Game event "' + command + '" not sent: no device connected.', 'err');
-          return false;
-        }
-        if (state.activity) {
-          log('Game event "' + command + '" not sent: shared device is busy; event is not replayed.', 'err');
-          return false;
-        }
-        bleLastSendAt = performance.now();
-        await sdk.device.send({
-          deviceId: target.deviceId,
-          connectionId: target.connectionId,
-          text: command
-        });
-        log('Game → BLE: ' + command, 'ok');
-        return true;
-      } catch (error) {
-        fail('Send game event "' + command + '"', error);
-        return false;
+      const state = await sdk.device.getState();
+      const target = state.currentDevice;
+      if (!target) {
+        log('Game event "' + command + '" not sent: no device connected.', 'err');
+        return;
       }
-    };
+      if (state.activity) {
+        log('Game event "' + command + '" not sent: shared device is busy; event is not replayed.', 'err');
+        return;
+      }
 
-    const promise = bleQueue.then(task, task);
-    bleQueue = promise.catch(() => false);
-    return promise;
+      bleLastSendAt = performance.now();
+      await sdk.device.send({
+        deviceId: target.deviceId,
+        connectionId: target.connectionId,
+        text: command
+      });
+      log((urgent ? 'URGENT ' : '') + 'Game → BLE: ' + command, 'ok');
+    } catch (error) {
+      fail('Send game event "' + command + '"', error);
+    } finally {
+      gameSendInFlight = false;
+
+      // STOP always wins over anything queued while the previous write was active.
+      if (urgentStopPending || pendingGameEvent) {
+        void pumpGameCommandQueue();
+      }
+    }
   }
 
   function startGame() {
@@ -806,19 +844,19 @@
     game.lastFrame = performance.now();
     updateScore();
     ui.overlay.classList.add('hidden');
-    void queueGameCommand('moveup');
+    pendingGameEvent = null;
+    urgentStopPending = false;
+    queueGameCommand('start');
   }
 
   function triggerUp() {
     if (game.mode !== 'running') return;
     game.bird.vy = -430;
-    void queueGameCommand('left');
   }
 
   function triggerDown() {
     if (game.mode !== 'running') return;
     game.bird.vy = Math.max(game.bird.vy + 360, 340);
-    void queueGameCommand('right');
   }
 
   async function gameOver() {
@@ -839,7 +877,7 @@
     ui.overlayText.textContent = 'Score: ' + game.score + ' · Best: ' + game.best;
     ui.overlayStartBtn.textContent = 'Play Again';
     ui.overlay.classList.remove('hidden');
-    await queueGameCommand('stop');
+    queueGameCommand('stop', {urgent: true});
   }
 
   function spawnPipe() {
@@ -876,6 +914,10 @@
         p.scored = true;
         game.score += 1;
         updateScore();
+        queueGameCommand('pipe');
+        if (game.score % 5 === 0) {
+          queueGameCommand('milestone');
+        }
       }
     }
     game.pipes = game.pipes.filter((p) => p.x + p.width > -20);
