@@ -1,4 +1,4 @@
-# Flappy BLE Device Blockly — v3.1.1
+# Flappy BLE Device Blockly — v3.1.2
 
 Flappy BLE v3 fixes the direction of the Blockly integration.
 
@@ -198,3 +198,20 @@ v3.1.1 makes this behavior explicit:
 - local metadata records `defaultTemplateVersion`
 
 This gives users a predictable recovery path after experimenting with or breaking the Blockly program, without destructive automatic migration.
+
+
+## v3.1.2 — restore button fix
+
+The restore action no longer depends on `window.confirm()`. Some sandboxed module hosts may suppress or fail to surface native modal dialogs, which can make the restore button appear unresponsive.
+
+Restore now:
+
+1. immediately changes the button to **Restoring…**
+2. backs up the current workspace
+3. replaces the editor with the current default workspace
+4. resizes Blockly
+5. regenerates the Python preview
+6. persists the restored workspace
+7. shows **Restored** and an explicit status message
+
+Errors are shown in the workspace status and module log instead of failing behind a modal.
