@@ -129,21 +129,7 @@
                     block: {
                       type: 'flappy_light',
                       id: 'start_light',
-                      fields: {STATE: 'ON'},
-                      next: {
-                        block: {
-                          type: 'flappy_motor',
-                          id: 'start_left',
-                          fields: {SIDE: 'LEFT', DIR: 'FORWARD', SPEED: 35},
-                          next: {
-                            block: {
-                              type: 'flappy_motor',
-                              id: 'start_right',
-                              fields: {SIDE: 'RIGHT', DIR: 'FORWARD', SPEED: 35}
-                            }
-                          }
-                        }
-                      }
+                      fields: {STATE: 'ON'}
                     }
                   }
                 },
@@ -179,9 +165,30 @@
                                   fields: {SIDE: 'RIGHT', DIR: 'FORWARD', SPEED: 60},
                                   next: {
                                     block: {
-                                      type: 'flappy_light',
-                                      id: 'milestone_light',
-                                      fields: {STATE: 'RANDOM'}
+                                      type: 'flappy_delay',
+                                      id: 'milestone_delay',
+                                      fields: {MS: 300},
+                                      next: {
+                                        block: {
+                                          type: 'flappy_motor_stop',
+                                          id: 'milestone_stop_left',
+                                          fields: {SIDE: 'LEFT'},
+                                          next: {
+                                            block: {
+                                              type: 'flappy_motor_stop',
+                                              id: 'milestone_stop_right',
+                                              fields: {SIDE: 'RIGHT'},
+                                              next: {
+                                                block: {
+                                                  type: 'flappy_light',
+                                                  id: 'milestone_light',
+                                                  fields: {STATE: 'RANDOM'}
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
                                     }
                                   }
                                 }
