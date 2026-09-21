@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.1.0';
+  const VERSION = '3.1.1';
   const WORKSPACE_KEY = 'deviceWorkspace.v3';
   const META_KEY = 'deviceWorkspace.meta.v3';
   const BACKUP_KEY = 'deviceWorkspace.backup.v3';
@@ -36,7 +36,11 @@
     clearLogBtn: $('clearLogBtn'),
     blocklyDiv: $('blocklyDiv'),
     saveBtn: $('saveBtn'),
-    starterBtn: $('starterBtn'),
+    restoreDefaultsBtn: $('restoreDefaultsBtn'),
+    defaultsBanner: $('defaultsBanner'),
+    defaultsBannerTitle: $('defaultsBannerTitle'),
+    defaultsBannerText: $('defaultsBannerText'),
+    defaultsBannerBtn: $('defaultsBannerBtn'),
     workspaceStatus: $('workspaceStatus'),
     blocklyVersion: $('blocklyVersion'),
     codePreview: $('codePreview'),
@@ -299,8 +303,12 @@
               serializedSaved.includes('"MESSAGE":"stop"');
 
             if (looksLikeV30DirectionalStarter) {
-              setWorkspaceStatus('Old v3.0 directional device blocks restored. Use Starter Blocks for the new state-event design.', 'warn');
-              log('v3.0 directional Blockly was preserved. Click Starter Blocks to switch to start/pipe/milestone/stop.', 'muted');
+              setWorkspaceStatus('Older directional device blocks restored. Current defaults are v' + VERSION + '.', 'warn');
+              showDefaultsBanner(
+                'Older default Blockly detected',
+                'Your saved v3.0 directional program was preserved. Current default template: v' + VERSION + '.'
+              );
+              log('Older directional Blockly was preserved. Use Restore v' + VERSION + ' Defaults to switch to start/pipe/milestone/stop.', 'muted');
             } else {
               setWorkspaceStatus('Saved device blocks restored.', 'ok');
             }
@@ -316,7 +324,7 @@
 
     if (!restored) {
       window.Blockly.serialization.workspaces.load(starterWorkspace(), workspace);
-      setWorkspaceStatus('Starter Crowbot program loaded.');
+      setWorkspaceStatus('Current v' + VERSION + ' defaults loaded.', 'ok');
     }
   }
 
@@ -360,7 +368,8 @@
         adapterVersion: window.FlappyCrowbotAdapter.version,
         expectedFirmwareVersion: window.FlappyCrowbotAdapter.expectedFirmware,
         timestamp: new Date().toISOString(),
-        provenance: 'local-editor'
+        provenance: 'local-editor',
+        defaultTemplateVersion: VERSION
       };
       await sdk.storage.set(WORKSPACE_KEY, snapshot);
       await sdk.storage.set(META_KEY, metadata);
@@ -373,16 +382,33 @@
     }
   }
 
-  async function restoreStarter() {
+  function showDefaultsBanner(title, message) {
+    ui.defaultsBannerTitle.textContent = title;
+    ui.defaultsBannerText.textContent = message;
+    ui.defaultsBanner.classList.remove('hidden');
+  }
+
+  function hideDefaultsBanner() {
+    ui.defaultsBanner.classList.add('hidden');
+  }
+
+  async function restoreCurrentDefaults() {
     if (!workspace) return;
-    if (!window.confirm('Replace the device editor with the starter Crowbot program?')) return;
+    const accepted = window.confirm(
+      'Restore the current Flappy BLE v' + VERSION + ' default Crowbot blocks?\n\n' +
+      'Your current Blockly workspace will be backed up first, then replaced.'
+    );
+    if (!accepted) return;
+
     try {
-      await backupCurrentWorkspace('before-starter-reset');
+      await backupCurrentWorkspace('before-restore-v' + VERSION + '-defaults');
       window.Blockly.serialization.workspaces.load(starterWorkspace(), workspace);
-      updateCodePreview();
-      await saveWorkspace('Starter blocks saved');
+      updateCodePreview('v' + VERSION + ' default program');
+      await saveWorkspace('v' + VERSION + ' defaults saved');
+      hideDefaultsBanner();
+      log('Restored current v' + VERSION + ' default Crowbot program.', 'ok');
     } catch (error) {
-      fail('Restore starter program', error);
+      fail('Restore current defaults', error);
     }
   }
 
@@ -1103,7 +1129,8 @@
     ui.upBtn.addEventListener('click', triggerUp);
     ui.downBtn.addEventListener('click', triggerDown);
     ui.saveBtn.addEventListener('click', () => void saveWorkspace('Saved'));
-    ui.starterBtn.addEventListener('click', () => void restoreStarter());
+    ui.restoreDefaultsBtn.addEventListener('click', () => void restoreCurrentDefaults());
+    ui.defaultsBannerBtn.addEventListener('click', () => void restoreCurrentDefaults());
     ui.uploadBtn.addEventListener('click', () => void uploadToDevice());
     ui.readBtn.addEventListener('click', () => void readBlocksFromDevice());
     ui.cancelUploadBtn.addEventListener('click', () => void cancelUpload());
