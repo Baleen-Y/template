@@ -3,15 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Flappy BLE</title>
+  <title>Flappy BLE Blockly</title>
   <link rel="stylesheet" href="./assets/style.css" />
 </head>
 <body>
   <main class="app">
     <header class="topbar">
       <div>
-        <h1>Flappy BLE</h1>
-        <p class="subtitle">Fly, dodge, and control your Bluetooth device.</p>
+        <div class="eyebrow">iCreator Blockly Game</div>
+        <h1>Flappy BLE Blockly</h1>
+        <p class="subtitle">Build the game logic with blocks, then fly it with a Bluetooth device linked to every event.</p>
       </div>
       <div class="device-bar">
         <span id="deviceStatus" class="status disconnected">Disconnected</span>
@@ -22,56 +23,93 @@
 
     <section id="sdkWarning" class="warning hidden">Open this module in iCreator.</section>
 
-    <section class="layout">
-      <div class="game-card">
-        <div class="canvas-wrap">
-          <canvas id="gameCanvas" width="900" height="520" aria-label="Flappy BLE game"></canvas>
-          <div id="overlay" class="overlay">
-            <div class="overlay-card">
-              <h2 id="overlayTitle">Ready?</h2>
-              <p id="overlayText">Connect Bluetooth, then start the game.</p>
-              <button id="startBtn" class="primary">Start Game</button>
-            </div>
+    <section class="workspace-shell">
+      <section class="game-column">
+        <div class="toolbar-card">
+          <div class="score-box">
+            <div><span>Score</span><strong id="score">0</strong></div>
+            <div><span>Best</span><strong id="best">0</strong></div>
+          </div>
+          <div class="run-actions">
+            <button id="startBtn" class="primary" disabled>Run Blocks & Start</button>
+            <button id="stopBtn" class="ghost" disabled>Stop Round</button>
           </div>
         </div>
 
-        <div class="controls">
-          <button id="upBtn" class="control-btn up" aria-label="Move up">↑ <span>UP</span></button>
-          <button id="downBtn" class="control-btn down" aria-label="Move down">↓ <span>DOWN</span></button>
+        <div class="game-card">
+          <div class="canvas-wrap">
+            <canvas id="gameCanvas" width="900" height="520" aria-label="Flappy BLE Blockly game"></canvas>
+            <div id="overlay" class="overlay">
+              <div class="overlay-card">
+                <h2 id="overlayTitle">Build your game</h2>
+                <p id="overlayText">Connect Bluetooth, arrange blocks, then run the round.</p>
+                <button id="overlayStartBtn" class="primary" disabled>Run Blocks & Start</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="controls">
+            <button id="upBtn" class="control-btn up" aria-label="Trigger UP event">↑ <span>UP EVENT</span></button>
+            <button id="downBtn" class="control-btn down" aria-label="Trigger DOWN event">↓ <span>DOWN EVENT</span></button>
+          </div>
+          <p class="hint">Keyboard ↑ / ↓ triggers the matching Blockly event. The bird only reacts if your event contains a movement block.</p>
         </div>
-        <p class="hint">Keyboard: ↑ sends the Up command · ↓ sends the Down command</p>
-      </div>
 
-      <aside class="panel">
-        <div class="score-box">
-          <div><span>Score</span><strong id="score">0</strong></div>
-          <div><span>Best</span><strong id="best">0</strong></div>
-        </div>
-
-        <h2>BLE Commands</h2>
-        <p class="panel-note">Edit the text sent at each game event.</p>
-
-        <label>Game start
-          <input id="cmdStart" maxlength="80" value="moveup" />
-        </label>
-        <label>UP action
-          <input id="cmdUp" maxlength="80" value="left" />
-        </label>
-        <label>DOWN action
-          <input id="cmdDown" maxlength="80" value="right" />
-        </label>
-        <label>Game over
-          <input id="cmdStop" maxlength="80" value="stop" />
-        </label>
-        <button id="saveBtn" class="secondary wide">Save Commands</button>
-
-        <div class="log-wrap">
-          <div class="log-title"><span>Command log</span><button id="clearLogBtn" class="tiny">Clear</button></div>
+        <div class="runtime-card">
+          <div class="section-title-row">
+            <div>
+              <h2>Runtime</h2>
+              <p>Each round freezes one Blockly snapshot. Editing blocks affects the next round.</p>
+            </div>
+            <span id="runtimeState" class="pill">Idle</span>
+          </div>
+          <div class="runtime-grid">
+            <div><span>Gravity</span><strong id="gravityValue">1250</strong></div>
+            <div><span>Pipe gap</span><strong id="gapValue">150</strong></div>
+            <div><span>Pipe speed</span><strong id="speedValue">235</strong></div>
+          </div>
+          <div class="log-title">
+            <span>Event & BLE log</span>
+            <button id="clearLogBtn" class="tiny">Clear</button>
+          </div>
           <div id="commandLog" class="log"></div>
         </div>
-      </aside>
+      </section>
+
+      <section class="editor-column">
+        <div class="editor-card">
+          <div class="editor-head">
+            <div>
+              <div class="eyebrow">Program Layer</div>
+              <h2>Blockly Game Logic</h2>
+              <p>Drag event blocks and connect actions. Your blocks control both the bird and BLE commands.</p>
+            </div>
+            <div class="editor-actions">
+              <button id="saveWorkspaceBtn" class="secondary">Save</button>
+              <button id="resetWorkspaceBtn" class="ghost">Starter Blocks</button>
+            </div>
+          </div>
+          <div id="blocklyDiv" class="blockly-host" aria-label="Blockly editor"></div>
+          <div class="editor-footer">
+            <span id="workspaceStatus">Loading Blockly…</span>
+            <span id="blocklyVersion"></span>
+          </div>
+        </div>
+
+        <details class="help-card">
+          <summary>How the blocks link to the game</summary>
+          <div class="help-body">
+            <p><strong>Event blocks</strong> run when the matching game event happens. Actions under that event run from top to bottom.</p>
+            <p><strong>Send BLE command</strong> writes the exact text in the block through the current iCreator shared BLE connection. Failed commands are not silently replayed.</p>
+            <p><strong>Game physics</strong> blocks change the browser game only. They do not claim to change device firmware.</p>
+          </div>
+        </details>
+      </section>
     </section>
   </main>
+
+  <script src="./assets/vendor/blockly.min.js"></script>
+  <script src="./assets/custom-blocks.js"></script>
   <script src="./assets/main.js"></script>
 </body>
 </html>
