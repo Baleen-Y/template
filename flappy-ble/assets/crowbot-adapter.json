@@ -1,0 +1,45 @@
+{
+  "adapterId": "crowbot-esp32-mqtt",
+  "adapterVersion": "3.0.0",
+  "evidence": "host-supported + firmware-inspected",
+  "profileId": "integem-crowbot-mqtt-v1",
+  "supportedHardware": ["Inspected Crowbot ESP32 compatibility firmware"],
+  "gatt": {
+    "serviceUuid": "00001848-0000-1000-8000-00805f9b34fb",
+    "writeCharacteristicUuid": "00002a6e-0000-1000-8000-00805f9b34fb",
+    "receiveCharacteristicUuid": "00002a6e-0000-1000-8000-00805f9b34fb",
+    "writeMode": "with-response"
+  },
+  "artifact": {
+    "kind": "micropython",
+    "entryPoint": "MQTT",
+    "exampleSignature": "def MQTT(mqtt_msg, voltage):",
+    "firmwarePrepends": "from libs.command import *",
+    "firmwareAppends": "two-space-indented return 0",
+    "sourceLimitBytes": 131072,
+    "workspaceLimitBytes": 262144,
+    "workspacePolicy": "replace"
+  },
+  "transport": {
+    "owner": "iCreator host",
+    "wireProtocol": "legacy b/m framing",
+    "manualFramingInModule": false,
+    "duplicateWriteHandling": "host paces identical consecutive packets at approximately 2100 ms",
+    "finalAck": ["upload:ok", "upload:error"],
+    "ackMeaning": "device transfer/reload acknowledgement, not business-behavior proof"
+  },
+  "readback": {
+    "request": "get_device_block_xml",
+    "response": "raw saved Blockly workspace JSON over notifications/indications",
+    "firstByteTimeoutMs": 5000,
+    "idleTimeoutMs": 5000,
+    "totalTimeoutMs": 60000,
+    "maxBytes": 262144,
+    "actualSourceReadback": false
+  },
+  "blockly": {
+    "blockSetId": "flappy-crowbot-device",
+    "blockSetVersion": "3.0.0",
+    "generatorVersion": "3.0.0"
+  }
+}
