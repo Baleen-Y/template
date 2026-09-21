@@ -1,86 +1,140 @@
-# Flappy BLE Blockly — v2.0.0
+# Flappy BLE Device Blockly — v3.0.0
 
-A directly importable iCreator module that turns the Flappy-style game into a Blockly-programmable game.
+Flappy BLE v3 fixes the direction of the Blockly integration.
 
-## What changed from v1
+The browser game and the physical-device program are now separate layers:
 
-The old version used four text inputs for fixed BLE commands. v2 keeps the same module ID (`flappy-ble`) so it can be installed as an update, but the game logic now lives in a real bundled Blockly workspace.
+- **Flappy game** runs in the module and sends runtime BLE event strings.
+- **Device Blockly** generates the Crowbot Python callback that is uploaded to the physical device.
+- **Device readback** retrieves the device's saved Blockly workspace and restores it into the same editor.
 
-The Blockly program can react to:
+Dragging a device block does not execute hardware. Hardware behavior changes only after an explicit **Upload to Device**.
 
-- game start
-- UP press
-- DOWN press
-- pipe passed
-- game over
+## Default game events
 
-Actions can:
+The browser game sends these exact strings:
 
-- flap or dive the bird
-- send exact BLE text
-- change gravity
-- change pipe gap
-- change pipe speed
-- add/subtract score
-- wait
-- repeat nested actions
-- run nested actions based on score
+- game start -> `moveup`
+- UP -> `left`
+- DOWN -> `right`
+- game over -> `stop`
 
-The starter blocks preserve the original behavior:
+The default device Blockly program maps them to the original Crowbot command-library examples:
 
-- game start -> send `moveup`
-- UP -> flap + send `left`
-- DOWN -> dive + send `right`
-- game over -> send `stop`
+- `moveup` -> left + right motor forward
+- `left` -> stop left motor + move right motor forward
+- `right` -> move left motor forward + stop right motor
+- `stop` -> stop both motors
 
-## Blockly runtime
+## Device Blockly blocks
 
-Blockly 13.3.0 is vendored locally at:
+The v3 starter toolbox contains:
 
-`assets/vendor/blockly_compressed.js`, `assets/vendor/blocks_compressed.js`, and `assets/vendor/en.js`
+- Crowbot device program
+- when game message ...
+- device light on/off/random
+- left/right motor forward/backward with speed
+- stop left/right motor
+- wait milliseconds
 
-No CDN is used by the installed module. The repository workflow `.github/workflows/vendor-flappy-blockly.yml` only exists to pin and copy the upstream runtime into the release directory during repository development.
+The block vocabulary is module-owned teaching content. The actual Crowbot function-name mapping is isolated in:
 
-The runtime module itself has no external network dependency.
+`assets/crowbot-adapter.js`
 
-## Workspace persistence
+If a teacher-maintained firmware library renames a function, change the adapter/generator mapping rather than the BLE transfer framing.
 
-The editable Blockly structure is stored with the iCreator SDK, not localStorage/IndexedDB.
+## Generated Crowbot source
 
-- `workspace.v2`: raw Blockly workspace JSON from `Blockly.serialization.workspaces.save`
-- `workspace.meta.v2`: local version/provenance metadata
-- `bestScore`: best game score
+The module generates a final callback shaped like:
 
-At the start of every round the current workspace is frozen and loaded into a separate headless Blockly workspace. Later edits therefore affect the next round, not an already running round.
+```python
+def MQTT(mqtt_msg, voltage):
+  if mqtt_msg == "moveup":
+    moveup_left(50)
+    moveup_right(50)
+```
 
-## Bluetooth behavior
+If delay blocks are used, the generator adds `import time` and emits `time.sleep_ms(...)`.
 
-The module uses the host-supported Blockly-compatible connection profile:
+The module sends the final Python directly. It does not use the historical colon-string converter.
+
+## Upload loop
+
+Upload is an explicit user action.
+
+1. Save a frozen Blockly workspace snapshot.
+2. Generate Python from that exact frozen snapshot.
+3. Verify a compatible `integem-crowbot-mqtt-v1` connection.
+4. Call `sdk.device.upload` with:
+   - `kind: 'micropython'`
+   - generated source
+   - `workspacePolicy: 'replace'`
+   - the matching raw workspace snapshot
+5. Observe `watchUpload` and await `waitForUpload`.
+
+The host keeps the existing Crowbot b/m transport, pacing and ACK handling. The module does not manually send reserved `b:` or `m:` framing.
+
+An upload ACK is reported as transfer/reload acknowledgement, not proof that every physical action behaves correctly.
+
+## Read from device
+
+Readback uses the current legacy request:
+
+`get_device_block_xml`
+
+The module:
+
+- subscribes to `sdk.device.onData` before sending the request
+- filters by deviceId, connectionId and project session
+- uses streaming UTF-8 decoding
+- limits the workspace to 256 KiB
+- uses a 5-second first-byte timeout
+- uses a 5-second idle timeout
+- uses a 60-second absolute timeout
+- rejects unknown mixed telemetry instead of silently stripping it
+- parses one complete top-level JSON workspace
+- stores the raw parsed workspace as a local readback backup when storage permits
+- validates the downloaded blocks in a temporary Blockly workspace
+- backs up current edits before replacement
+- asks before replacing the current editor
+- regenerates Python and labels it **Generated from recovered blocks**
+
+The protocol does not provide actual `mqtt.py` source readback. The code shown after readback is regenerated from the recovered blocks.
+
+## Local storage
+
+v3 uses separate versioned keys:
+
+- `deviceWorkspace.v3`
+- `deviceWorkspace.meta.v3`
+- `deviceWorkspace.backup.v3`
+- `deviceReadback.raw.v3`
+- existing `bestScore`
+
+The v2 browser-game Blockly storage is not reused as the device workspace.
+
+## Bluetooth profile
+
+v3 targets the inspected Crowbot ESP32 compatibility path and uses:
 
 `integem-crowbot-mqtt-v1`
 
-It does not use `navigator.bluetooth`.
+It does not use `navigator.bluetooth`, direct GATT, WebUSB, Web Serial, MQTT, WebSocket, a custom backend, or a custom b/m implementation.
 
-The `send BLE command` block calls `sdk.device.send` with the exact text in the block. Each send refreshes the shared device state first. Failed or BUSY sends are shown in the log and are not silently replayed.
+## Bundled runtime
 
-The module does **not** upload a new Crowbot firmware callback. Blockly in this module programs the browser game's event logic and the commands it sends to an already compatible device. Therefore v2 does not claim that game-physics blocks change firmware behavior.
+Blockly 8.0.0 is bundled locally in:
 
-## Import / update
+- `assets/vendor/blockly_compressed.js`
+- `assets/vendor/blocks_compressed.js`
+- `assets/vendor/en.js`
 
-Import the `flappy-ble/` folder directly, or package it with the iCreator module packer if the host repository is available.
+No CDN or external runtime dependency is required.
 
-Because the manifest ID remains `flappy-ble` and the version is now `2.0.0`, it is intended to update the previous release.
+## Physical validation status
 
-## Verification scope
+The module contains the real SDK upload and notification-readback implementation.
 
-Repository/static checks can verify:
+Static checks can verify release structure, permissions, local assets, syntax and the presence of the real upload/readback paths. A physical Crowbot was not available in the development environment, so real-device upload/readback comparison and motor/light behavior remain pending hardware validation.
 
-- manifest shape and permissions
-- local asset references
-- JavaScript syntax
-- Blockly workspace serialization API presence in the vendored runtime
-- no runtime CDN/external network URL in the module release files
-
-Physical BLE behavior still requires a real compatible device. A successful GATT write is not proof that the device executed the command.
-
-No physical-device test is claimed here.
+Do not interpret a successful transfer ACK as full hardware behavior certification.
