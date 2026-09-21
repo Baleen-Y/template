@@ -284,7 +284,19 @@
             temp.dispose();
             window.Blockly.serialization.workspaces.load(saved, workspace);
             restored = true;
-            setWorkspaceStatus('Saved device blocks restored.', 'ok');
+            const serializedSaved = JSON.stringify(saved);
+            const looksLikeV30DirectionalStarter =
+              serializedSaved.includes('"MESSAGE":"moveup"') &&
+              serializedSaved.includes('"MESSAGE":"left"') &&
+              serializedSaved.includes('"MESSAGE":"right"') &&
+              serializedSaved.includes('"MESSAGE":"stop"');
+
+            if (looksLikeV30DirectionalStarter) {
+              setWorkspaceStatus('Old v3.0 directional device blocks restored. Use Starter Blocks for the new state-event design.', 'warn');
+              log('v3.0 directional Blockly was preserved. Click Starter Blocks to switch to start/pipe/milestone/stop.', 'muted');
+            } else {
+              setWorkspaceStatus('Saved device blocks restored.', 'ok');
+            }
           } catch (error) {
             temp.dispose();
             fail('Saved device workspace validation', error);
