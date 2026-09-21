@@ -122,19 +122,26 @@
             BODY: {
               block: {
                 type: 'flappy_on_message',
-                id: 'on_moveup',
-                fields: {MESSAGE: 'moveup'},
+                id: 'on_start',
+                fields: {MESSAGE: 'start'},
                 inputs: {
                   DO: {
                     block: {
-                      type: 'flappy_motor',
-                      id: 'moveup_left',
-                      fields: {SIDE: 'LEFT', DIR: 'FORWARD', SPEED: 50},
+                      type: 'flappy_light',
+                      id: 'start_light',
+                      fields: {STATE: 'ON'},
                       next: {
                         block: {
                           type: 'flappy_motor',
-                          id: 'moveup_right',
-                          fields: {SIDE: 'RIGHT', DIR: 'FORWARD', SPEED: 50}
+                          id: 'start_left',
+                          fields: {SIDE: 'LEFT', DIR: 'FORWARD', SPEED: 35},
+                          next: {
+                            block: {
+                              type: 'flappy_motor',
+                              id: 'start_right',
+                              fields: {SIDE: 'RIGHT', DIR: 'FORWARD', SPEED: 35}
+                            }
+                          }
                         }
                       }
                     }
@@ -143,40 +150,40 @@
                 next: {
                   block: {
                     type: 'flappy_on_message',
-                    id: 'on_left',
-                    fields: {MESSAGE: 'left'},
+                    id: 'on_pipe',
+                    fields: {MESSAGE: 'pipe'},
                     inputs: {
                       DO: {
                         block: {
-                          type: 'flappy_motor_stop',
-                          id: 'left_stop',
-                          fields: {SIDE: 'LEFT'},
-                          next: {
-                            block: {
-                              type: 'flappy_motor',
-                              id: 'right_forward',
-                              fields: {SIDE: 'RIGHT', DIR: 'FORWARD', SPEED: 60}
-                            }
-                          }
+                          type: 'flappy_light',
+                          id: 'pipe_light',
+                          fields: {STATE: 'RANDOM'}
                         }
                       }
                     },
                     next: {
                       block: {
                         type: 'flappy_on_message',
-                        id: 'on_right',
-                        fields: {MESSAGE: 'right'},
+                        id: 'on_milestone',
+                        fields: {MESSAGE: 'milestone'},
                         inputs: {
                           DO: {
                             block: {
                               type: 'flappy_motor',
-                              id: 'left_forward',
+                              id: 'milestone_left',
                               fields: {SIDE: 'LEFT', DIR: 'FORWARD', SPEED: 60},
                               next: {
                                 block: {
-                                  type: 'flappy_motor_stop',
-                                  id: 'right_stop',
-                                  fields: {SIDE: 'RIGHT'}
+                                  type: 'flappy_motor',
+                                  id: 'milestone_right',
+                                  fields: {SIDE: 'RIGHT', DIR: 'FORWARD', SPEED: 60},
+                                  next: {
+                                    block: {
+                                      type: 'flappy_light',
+                                      id: 'milestone_light',
+                                      fields: {STATE: 'RANDOM'}
+                                    }
+                                  }
                                 }
                               }
                             }
@@ -197,7 +204,14 @@
                                     block: {
                                       type: 'flappy_motor_stop',
                                       id: 'stop_right',
-                                      fields: {SIDE: 'RIGHT'}
+                                      fields: {SIDE: 'RIGHT'},
+                                      next: {
+                                        block: {
+                                          type: 'flappy_light',
+                                          id: 'stop_light',
+                                          fields: {STATE: 'OFF'}
+                                        }
+                                      }
                                     }
                                   }
                                 }
