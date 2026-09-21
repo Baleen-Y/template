@@ -2,40 +2,61 @@ declare global {
   interface Window {
     icreator?: ICreatorSdk;
     Blockly: any;
-    FlappyBlockly: {
-      blockSetId: string;
-      blockSetVersion: string;
-      generatorVersion: string;
-      eventTypes: Record<GameEventName, string>;
-      toolbox: unknown;
-    };
   }
 }
 
-type GameEventName = 'start' | 'up' | 'down' | 'pipe' | 'gameover';
+type Target = { deviceId: string; connectionId: string };
 
-type DeviceTarget = {
-  deviceId: string;
-  connectionId: string;
+type Device = Target & {
+  name: string;
+  profileId: string;
 };
 
 type DeviceState = {
-  currentDevice: (DeviceTarget & {name: string; profileId: string}) | null;
-  activity: null | {kind: string};
+  projectSessionId: string;
+  currentDevice: Device | null;
+  activity: null | {
+    kind: 'send' | 'read' | 'upload';
+    owner: {type: 'host' | 'module'; id: string};
+    jobId?: string;
+  };
 };
 
 interface ICreatorSdk {
-  ready(): Promise<{apiVersion: string; platform: string}>;
+  ready(): Promise<{
+    apiVersion: string;
+    module: {id: string; version: string};
+    project: {sessionId: string};
+  }>;
   storage: {
     get(key: string): Promise<unknown>;
     set(key: string, value: unknown): Promise<void>;
   };
   device: {
     connect(options: {profileId: string}): Promise<DeviceState>;
-    disconnect(target: DeviceTarget): Promise<void>;
+    disconnect(target: Target): Promise<void>;
     getState(): Promise<DeviceState>;
-    send(request: DeviceTarget & {text: string}): Promise<void>;
     watchState(callback: (state: DeviceState) => void): Promise<() => void>;
+    onData(callback: (event: {
+      deviceId: string;
+      connectionId: string;
+      projectSessionId: string;
+      data: number[];
+    }) => void): Promise<() => void>;
+    send(request: Target & {text: string}): Promise<void>;
+    upload(request: Target & {
+      profileId: string;
+      clientRequestId: string;
+      artifact: {
+        kind: 'micropython';
+        source: string;
+        workspacePolicy: 'replace';
+        workspace: unknown;
+      };
+    }): Promise<{jobId: string}>;
+    watchUpload(jobId: string, callback: (state: unknown) => void): Promise<() => void>;
+    waitForUpload(jobId: string): Promise<{confirmation?: string}>;
+    cancelUpload(jobId: string): Promise<void>;
   };
   lifecycle: {
     onVisibilityChange(callback: (visible: boolean) => void): () => void;
@@ -44,47 +65,51 @@ interface ICreatorSdk {
 }
 
 /**
- * TypeScript source reference for Flappy BLE Blockly v2.
+ * v3 architecture:
  *
- * The shipped release is compiled/bundled JavaScript in flappy-ble/assets/.
- * The runtime architecture intentionally keeps three artifacts separate:
+ * browser Flappy game
+ *   -> sdk.device.send("moveup" | "left" | "right" | "stop")
  *
- * 1. Blockly workspace JSON: editable game logic.
- * 2. Browser runtime state: a frozen workspace snapshot for one game round.
- * 3. BLE text commands: exact strings emitted by send-BLE blocks.
+ * independent device Blockly workspace
+ *   -> frozen Blockly JSON
+ *   -> module-owned Crowbot Python generator
+ *   -> sdk.device.upload(source + workspacePolicy:"replace" + same snapshot)
  *
- * This version does not upload firmware source to the device.
+ * device workspace readback
+ *   -> subscribe sdk.device.onData first
+ *   -> sdk.device.send("get_device_block_xml")
+ *   -> bounded streaming UTF-8 / JSON parser
+ *   -> validate in temporary Blockly workspace
+ *   -> user-approved editor replacement
+ *
+ * The browser does not execute the uploaded device Python.
  */
-export async function sendBleCommand(
+
+export async function uploadCrowbotProgram(
   sdk: ICreatorSdk,
-  text: string
-): Promise<boolean> {
-  const command = text.trim();
-  if (!command) return false;
-
-  try {
-    const state = await sdk.device.getState();
-    if (!state.currentDevice || state.activity) return false;
-
-    await sdk.device.send({
-      deviceId: state.currentDevice.deviceId,
-      connectionId: state.currentDevice.connectionId,
-      text: command
-    });
-    return true;
-  } catch {
-    return false;
+  target: Device,
+  snapshot: unknown,
+  source: string
+): Promise<string> {
+  if (target.profileId !== 'integem-crowbot-mqtt-v1') {
+    throw new Error('Compatible Crowbot profile required');
   }
-}
 
-export function freezeWorkspace(Blockly: any, workspace: any): {
-  snapshot: unknown;
-  runtimeWorkspace: any;
-} {
-  const snapshot = Blockly.serialization.workspaces.save(workspace);
-  const runtimeWorkspace = new Blockly.Workspace();
-  Blockly.serialization.workspaces.load(snapshot, runtimeWorkspace);
-  return {snapshot, runtimeWorkspace};
+  const {jobId} = await sdk.device.upload({
+    deviceId: target.deviceId,
+    connectionId: target.connectionId,
+    profileId: target.profileId,
+    clientRequestId: crypto.randomUUID(),
+    artifact: {
+      kind: 'micropython',
+      source,
+      workspacePolicy: 'replace',
+      workspace: snapshot
+    }
+  });
+
+  await sdk.device.waitForUpload(jobId);
+  return jobId;
 }
 
 export {};
