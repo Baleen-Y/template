@@ -23,9 +23,9 @@ The browser sends lower-frequency state events instead:
 
 The starter device Blockly program maps them to the original Crowbot command-library examples:
 
-- `start` -> light on + both motors forward at speed 35
+- `start` -> light on
 - `pipe` -> random light feedback
-- `milestone` -> both motors forward at speed 60 + random light
+- `milestone` -> both motors forward briefly, wait 300 ms, stop both motors, then random light
 - `stop` -> stop both motors + light off
 
 This makes the physical device mirror game state/progress instead of mirroring individual finger presses.
@@ -180,3 +180,6 @@ The host cannot cancel a GATT write that is already in flight, so "priority stop
 The module keeps the same manifest ID and preserves SDK storage.
 
 A previously saved v3.0 device workspace is **not** overwritten automatically. If it still uses the original `moveup / left / right / stop` directional starter program, the editor shows a notice. Click **Starter Blocks** to replace it with the new `start / pipe / milestone / stop` starter mapping.
+
+
+The starter program intentionally does not keep the robot moving continuously after `start`. Motor motion is confined to a self-stopping milestone celebration, so a later missed STOP is less likely to leave a robot driving indefinitely.
