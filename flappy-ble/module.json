@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "flappy-ble",
   "name": "Flappy BLE Device Blockly",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "sdkVersion": "1",
   "runtime": "web-bundle",
   "entry": "index.html",
-  "description": "A Flappy game linked to a real Crowbot Blockly editor with generated Python, device upload, and workspace readback.",
+  "description": "Flappy game + Crowbot Blockly with priority-stop BLE events, meaningful game-state integration, upload, and workspace readback.",
   "permissions": ["storage", "device.read", "device.connect", "device.send", "device.upload"]
 }
