@@ -611,6 +611,7 @@
     totalTimer = setTimeout(() => reject(new Error('Device workspace read exceeded the 60 second total timeout.')), TOTAL_TIMEOUT);
 
     return {
+      target,
       promise,
       feed,
       reject,
