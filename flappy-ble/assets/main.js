@@ -1070,16 +1070,22 @@
       updateDeviceUi(state);
 
       if (readbackActive && state.activity && state.activity.owner) {
-        const ownId = sdkContext && sdkContext.module ? sdkContext.module.id : null;
-        const isOurModule = state.activity.owner.type === 'module' && state.activity.owner.id === ownId;
+        const moduleInfo = sdkContext && sdkContext.module ? sdkContext.module : {};
+        const owner = state.activity.owner;
+        const isOurModule = owner.type === 'module' && (
+          owner.id === moduleInfo.id ||
+          owner.id === moduleInfo.instanceId
+        );
         if (!isOurModule && state.activity.kind !== 'send') {
           abortReadback(new Error('Readback aborted because another client started a device operation.'));
         }
       }
 
-      if (readbackActive && state.currentDevice) {
+      if (readbackActive) {
         const sessionDevice = readbackActive.target;
-        if (sessionDevice && (
+        if (!state.currentDevice) {
+          abortReadback(new Error('Readback aborted because the Bluetooth device disconnected.'));
+        } else if (sessionDevice && (
           state.currentDevice.deviceId !== sessionDevice.deviceId ||
           state.currentDevice.connectionId !== sessionDevice.connectionId
         )) {
