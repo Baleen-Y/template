@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.1.1';
+  const VERSION = '3.1.2';
   const WORKSPACE_KEY = 'deviceWorkspace.v3';
   const META_KEY = 'deviceWorkspace.meta.v3';
   const BACKUP_KEY = 'deviceWorkspace.backup.v3';
@@ -393,22 +393,58 @@
   }
 
   async function restoreCurrentDefaults() {
-    if (!workspace) return;
-    const accepted = window.confirm(
-      'Restore the current Flappy BLE v' + VERSION + ' default Crowbot blocks?\n\n' +
-      'Your current Blockly workspace will be backed up first, then replaced.'
-    );
-    if (!accepted) return;
+    if (!workspace) {
+      setWorkspaceStatus('Blockly is not ready yet.', 'err');
+      log('Restore defaults ignored because Blockly is not ready.', 'err');
+      return;
+    }
+
+    const buttons = [ui.restoreDefaultsBtn, ui.defaultsBannerBtn].filter(Boolean);
+    const originalLabels = buttons.map((button) => button.textContent);
+
+    for (const button of buttons) {
+      button.disabled = true;
+      button.textContent = 'Restoring…';
+    }
+    setWorkspaceStatus('Backing up current blocks and restoring v' + VERSION + ' defaults…', 'warn');
+    log('Restoring current v' + VERSION + ' default Crowbot program…', 'muted');
 
     try {
       await backupCurrentWorkspace('before-restore-v' + VERSION + '-defaults');
+
+      // Blockly workspace load clears the current registered state before
+      // loading the supplied snapshot, so this replaces the editor contents.
       window.Blockly.serialization.workspaces.load(starterWorkspace(), workspace);
+      window.Blockly.svgResize(workspace);
       updateCodePreview('v' + VERSION + ' default program');
-      await saveWorkspace('v' + VERSION + ' defaults saved');
+
+      const saved = await saveWorkspace('v' + VERSION + ' defaults saved');
+      if (!saved) {
+        throw new Error('Defaults were loaded in the editor but could not be saved to project storage.');
+      }
+
       hideDefaultsBanner();
+      setWorkspaceStatus('Restored v' + VERSION + ' defaults.', 'ok');
       log('Restored current v' + VERSION + ' default Crowbot program.', 'ok');
+
+      for (const button of buttons) {
+        button.textContent = 'Restored';
+      }
+      setTimeout(() => {
+        buttons.forEach((button, index) => {
+          if (!disposed) {
+            button.disabled = false;
+            button.textContent = 'Restore v' + VERSION + ' Defaults';
+          }
+        });
+      }, 1200);
     } catch (error) {
-      fail('Restore current defaults', error);
+      const message = fail('Restore current defaults', error);
+      setWorkspaceStatus('Restore failed: ' + message, 'err');
+      buttons.forEach((button) => {
+        button.disabled = false;
+        button.textContent = 'Retry Restore v' + VERSION;
+      });
     }
   }
 
