@@ -1,4 +1,4 @@
-# Flappy BLE Device Blockly — v3.1.0
+# Flappy BLE Device Blockly — v3.1.1
 
 Flappy BLE v3 fixes the direction of the Blockly integration.
 
@@ -183,3 +183,18 @@ A previously saved v3.0 device workspace is **not** overwritten automatically. I
 
 
 The starter program intentionally does not keep the robot moving continuously after `start`. Motor motion is confined to a self-stopping milestone celebration, so a later missed STOP is less likely to leave a robot driving indefinitely.
+
+
+## v3.1.1 — restore current defaults
+
+Module updates preserve SDK storage, so an existing Blockly workspace is intentionally restored instead of silently overwritten by a new release.
+
+v3.1.1 makes this behavior explicit:
+
+- the editor always includes **Restore v3.1.1 Defaults**
+- older directional starter workspaces show an upgrade banner
+- restoring defaults first backs up the current workspace
+- the current workspace is then replaced with the current version's starter template
+- local metadata records `defaultTemplateVersion`
+
+This gives users a predictable recovery path after experimenting with or breaking the Blockly program, without destructive automatic migration.
