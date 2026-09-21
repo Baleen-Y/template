@@ -37,7 +37,7 @@ The starter blocks preserve the original behavior:
 
 Blockly 13.3.0 is vendored locally at:
 
-`assets/vendor/blockly.min.js`
+`assets/vendor/blockly_compressed.js`, `assets/vendor/blocks_compressed.js`, and `assets/vendor/en.js`
 
 No CDN is used by the installed module. The repository workflow `.github/workflows/vendor-flappy-blockly.yml` only exists to pin and copy the upstream runtime into the release directory during repository development.
 
