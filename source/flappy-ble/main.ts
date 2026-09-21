@@ -1,68 +1,90 @@
 declare global {
-  interface Window { icreator?: any; }
+  interface Window {
+    icreator?: ICreatorSdk;
+    Blockly: any;
+    FlappyBlockly: {
+      blockSetId: string;
+      blockSetVersion: string;
+      generatorVersion: string;
+      eventTypes: Record<GameEventName, string>;
+      toolbox: unknown;
+    };
+  }
 }
 
-type Commands = { start: string; up: string; down: string; stop: string };
-type GameMode = 'ready' | 'running' | 'over';
-type Pipe = { x: number; width: number; top: number; bottom: number; scored: boolean };
+type GameEventName = 'start' | 'up' | 'down' | 'pipe' | 'gameover';
 
-type GameState = {
-  mode: GameMode;
-  score: number;
-  best: number;
-  lastFrame: number;
-  spawnTimer: number;
-  stopSent: boolean;
-  bird: { x: number; y: number; vy: number; r: number };
-  pipes: Pipe[];
+type DeviceTarget = {
+  deviceId: string;
+  connectionId: string;
 };
 
-const DEFAULTS: Commands = {
-  start: 'moveup',
-  up: 'left',
-  down: 'right',
-  stop: 'stop'
+type DeviceState = {
+  currentDevice: (DeviceTarget & {name: string; profileId: string}) | null;
+  activity: null | {kind: string};
 };
+
+interface ICreatorSdk {
+  ready(): Promise<{apiVersion: string; platform: string}>;
+  storage: {
+    get(key: string): Promise<unknown>;
+    set(key: string, value: unknown): Promise<void>;
+  };
+  device: {
+    connect(options: {profileId: string}): Promise<DeviceState>;
+    disconnect(target: DeviceTarget): Promise<void>;
+    getState(): Promise<DeviceState>;
+    send(request: DeviceTarget & {text: string}): Promise<void>;
+    watchState(callback: (state: DeviceState) => void): Promise<() => void>;
+  };
+  lifecycle: {
+    onVisibilityChange(callback: (visible: boolean) => void): () => void;
+    onDispose(callback: () => void): void;
+  };
+}
 
 /**
- * Source reference for the shipped module.
- * Runtime code is compiled/bundled to ../../flappy-ble/assets/main.js.
+ * TypeScript source reference for Flappy BLE Blockly v2.
  *
- * Important BLE rules:
- * - Use window.icreator only.
- * - Default connection profile: integem-crowbot-mqtt-v1.
- * - Refresh device state before every send so stale connection IDs are not reused.
- * - Never auto-replay failed commands.
- * - Keep manual control sends <= 10/sec.
+ * The shipped release is compiled/bundled JavaScript in flappy-ble/assets/.
+ * The runtime architecture intentionally keeps three artifacts separate:
+ *
+ * 1. Blockly workspace JSON: editable game logic.
+ * 2. Browser runtime state: a frozen workspace snapshot for one game round.
+ * 3. BLE text commands: exact strings emitted by send-BLE blocks.
+ *
+ * This version does not upload firmware source to the device.
  */
-export async function sendGameCommand(
-  sdk: any,
-  text: string,
-  label: string
+export async function sendBleCommand(
+  sdk: ICreatorSdk,
+  text: string
 ): Promise<boolean> {
-  if (!text.trim()) return false;
+  const command = text.trim();
+  if (!command) return false;
 
   try {
     const state = await sdk.device.getState();
-    const target = state.currentDevice;
-    if (!target || state.activity) return false;
+    if (!state.currentDevice || state.activity) return false;
 
     await sdk.device.send({
-      deviceId: target.deviceId,
-      connectionId: target.connectionId,
-      text
+      deviceId: state.currentDevice.deviceId,
+      connectionId: state.currentDevice.connectionId,
+      text: command
     });
-
-    console.info(label, text);
     return true;
-  } catch (error) {
-    console.error(label, error);
+  } catch {
     return false;
   }
 }
 
-export async function connectDefaultDevice(sdk: any): Promise<void> {
-  await sdk.device.connect({ profileId: 'integem-crowbot-mqtt-v1' });
+export function freezeWorkspace(Blockly: any, workspace: any): {
+  snapshot: unknown;
+  runtimeWorkspace: any;
+} {
+  const snapshot = Blockly.serialization.workspaces.save(workspace);
+  const runtimeWorkspace = new Blockly.Workspace();
+  Blockly.serialization.workspaces.load(snapshot, runtimeWorkspace);
+  return {snapshot, runtimeWorkspace};
 }
 
-export { DEFAULTS };
+export {};
