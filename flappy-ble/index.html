@@ -12,7 +12,7 @@
       <div>
         <div class="eyebrow">iCreator · Device Blockly</div>
         <h1>Flappy BLE</h1>
-        <p class="subtitle">Play the game in the browser. Program what the physical Crowbot does when it receives each game event.</p>
+        <p class="subtitle">Play in the browser while the physical Crowbot reacts to meaningful game-state events instead of every button press.</p>
       </div>
       <div class="device-bar">
         <span id="deviceStatus" class="status disconnected">Disconnected</span>
@@ -39,20 +39,20 @@
             <div id="overlay" class="overlay">
               <div class="overlay-card">
                 <h2 id="overlayTitle">Flappy BLE</h2>
-                <p id="overlayText">Connect and upload a device program, then play.</p>
+                <p id="overlayText">Connect and upload a device program. UP/DOWN control only the bird; the robot reacts to game state.</p>
                 <button id="overlayStartBtn" class="primary">Start Game</button>
               </div>
             </div>
           </div>
           <div class="controls">
-            <button id="upBtn" class="control-btn up">↑<span>UP · sends left</span></button>
-            <button id="downBtn" class="control-btn down">↓<span>DOWN · sends right</span></button>
+            <button id="upBtn" class="control-btn up">↑<span>UP · bird only</span></button>
+            <button id="downBtn" class="control-btn down">↓<span>DOWN · bird only</span></button>
           </div>
           <div class="event-strip">
-            <span>Game start: <code>moveup</code></span>
-            <span>UP: <code>left</code></span>
-            <span>DOWN: <code>right</code></span>
-            <span>Game over: <code>stop</code></span>
+            <span>Game start: <code>start</code></span>
+            <span>Pass pipe: <code>pipe</code></span>
+            <span>Every 5 points: <code>milestone</code></span>
+            <span>Game over: <code>stop</code> (priority)</span>
           </div>
         </div>
 
@@ -60,7 +60,7 @@
           <div class="section-title-row">
             <div>
               <h2>Game & BLE log</h2>
-              <p>The browser game sends event strings. Uploaded device code decides the hardware action.</p>
+              <p>The browser sends low-frequency state events. STOP clears pending normal events and is sent next after any in-flight write.</p>
             </div>
             <button id="clearLogBtn" class="tiny">Clear</button>
           </div>
