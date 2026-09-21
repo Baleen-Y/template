@@ -1,4 +1,4 @@
-# Flappy BLE Device Blockly — v3.0.0
+# Flappy BLE Device Blockly — v3.1.0
 
 Flappy BLE v3 fixes the direction of the Blockly integration.
 
@@ -10,21 +10,25 @@ The browser game and the physical-device program are now separate layers:
 
 Dragging a device block does not execute hardware. Hardware behavior changes only after an explicit **Upload to Device**.
 
-## Default game events
+## v3.1 game-state integration
 
-The browser game sends these exact strings:
+v3.1 stops sending BLE commands for every UP/DOWN press. Those controls now affect only the bird.
 
-- game start -> `moveup`
-- UP -> `left`
-- DOWN -> `right`
+The browser sends lower-frequency state events instead:
+
+- game start -> `start`
+- each passed pipe -> `pipe`
+- every 5 points -> `milestone`
 - game over -> `stop`
 
-The default device Blockly program maps them to the original Crowbot command-library examples:
+The starter device Blockly program maps them to the original Crowbot command-library examples:
 
-- `moveup` -> left + right motor forward
-- `left` -> stop left motor + move right motor forward
-- `right` -> move left motor forward + stop right motor
-- `stop` -> stop both motors
+- `start` -> light on + both motors forward at speed 35
+- `pipe` -> random light feedback
+- `milestone` -> both motors forward at speed 60 + random light
+- `stop` -> stop both motors + light off
+
+This makes the physical device mirror game state/progress instead of mirroring individual finger presses.
 
 ## Device Blockly blocks
 
@@ -153,3 +157,26 @@ A hardware-free protocol mock was run during v3 development for the required loo
 7. generated source changes to `moveup_right(88)`
 
 The mock completed two uploads successfully. This verifies the module-side product/payload loop only; it is not physical BLE, firmware, motor, light, or host-container certification.
+
+
+## v3.1 priority-stop transport behavior
+
+The original v3.0 game used a strict Promise send queue. Rapid UP/DOWN input could build a long backlog of `left`/`right` messages, causing `stop` to sit behind stale commands.
+
+v3.1 changes game-event delivery semantics:
+
+- UP/DOWN never enter BLE transport.
+- Normal game events are state notifications, not a historical command queue.
+- While one send is in flight, at most one newest normal event is retained.
+- A pending `stop` clears every queued normal event.
+- `stop` becomes the next event attempted immediately after the current in-flight GATT write finishes.
+- The manual-send rate limit is still respected.
+- A failed/BUSY `stop` is reported and is not silently auto-replayed, matching the iCreator SDK contract.
+
+The host cannot cancel a GATT write that is already in flight, so "priority stop" means "drop stale pending events and send stop immediately after the current write", not preemption of a write already accepted by the host.
+
+## Updating from v3.0
+
+The module keeps the same manifest ID and preserves SDK storage.
+
+A previously saved v3.0 device workspace is **not** overwritten automatically. If it still uses the original `moveup / left / right / stop` directional starter program, the editor shows a notice. Click **Starter Blocks** to replace it with the new `start / pipe / milestone / stop` starter mapping.
