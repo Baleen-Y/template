@@ -1,5 +1,5 @@
 import { explainDifference } from './lesson-feedback.js';
-export const VERSION = '4.0.2';
+export const VERSION = '5.0.0';
 export const PROFILE = 'integem-crowbot-mqtt-v1';
 export const BLOCK_SET = 'flappy-crowbot-device';
 export const MAX_DRAFT = 64 * 1024;
@@ -12,35 +12,39 @@ export interface BlockJSON {
 }
 export interface Snapshot { blocks: { languageVersion: number; blocks: BlockJSON[] }; [key: string]: unknown }
 export type Action = { kind: 'light'; state: string } | { kind: 'motor'; side: string; direction: string; speed: number }
-  | { kind: 'stop'; side: string } | { kind: 'delay'; ms: number } | { kind: 'repeat'; count: number; actions: Action[] };
+  | { kind: 'pulse'; direction: string; speed: number; ms: number } | { kind: 'park' } | { kind: 'stop'; side: string } | { kind: 'delay'; ms: number } | { kind: 'repeat'; count: number; actions: Action[] };
 export interface Handler { message: string; actions: Action[] }
 export interface Stage {
   id: number; name: string; skill: string; goal: number; gap: number; speed: number; gravity: number; flap: number;
   milestone: number; effect: string; hint: string; handlers: Handler[];
+  world: string; promise: string; badge: string; lives: number;
 }
 const light = (state: string): Action => ({ kind: 'light', state });
 const delay = (ms: number): Action => ({ kind: 'delay', ms });
 const stop = (side: string): Action => ({ kind: 'stop', side });
 const motor = (side: string): Action => ({ kind: 'motor', side, direction: 'FORWARD', speed: 35 });
 const repeat = (count: number, actions: Action[]): Action => ({ kind: 'repeat', count, actions });
-const safety = (): Action[] => [stop('LEFT'), stop('RIGHT'), light('OFF')];
+// Light-only lessons deliberately contain NO motor calls, including their end event.
+const lightEnd = (): Handler => ({ message: 'stop', actions: [light('OFF')] });
 export const STAGES: Stage[] = [
-  { id: 1, name: 'First light', skill: 'Events & sequencing', goal: 3, gap: 235, speed: 145, gravity: 850, flap: 345,
-    milestone: 0, effect: 'Start lights the robot. Stop switches the motors and light off.',
-    hint: 'Connect two message blocks inside the program: start and stop. Keep both motor-stop blocks before light off.',
-    handlers: [{ message: 'start', actions: [light('ON')] }, { message: 'stop', actions: safety() }] },
-  { id: 2, name: 'Signal patterns', skill: 'Repeats & timing', goal: 5, gap: 195, speed: 180, gravity: 1000, flap: 380,
-    milestone: 0, effect: 'Each passed pipe flashes the light twice. No motor movement in this lesson.',
-    hint: 'In the pipe message use repeat 2. Inside it place light off, wait 100 ms, light on, wait 100 ms, in that order.',
+  { id: 1, name: 'Wake the forest', world: 'Sunbeam Woods', skill: 'Give Bolt a glow', goal: 3, gap: 235, speed: 165, gravity: 780, flap: 330, lives: 3,
+    badge: 'Glow Keeper', promise: 'Pip needs a lantern. Can you teach Bolt to light the way?',
+    milestone: 0, effect: 'Bolt lights up when your flight begins, and goes dark when you land. Only lights — no wheels.',
+    hint: 'Make two messages: start and stop. Put light ON under start. Put light OFF under stop. That is your whole first program!',
+    handlers: [{ message: 'start', actions: [light('ON')] }, lightEnd()] },
+  { id: 2, name: 'Send a sparkle', world: 'Moonbeam Lagoon', skill: 'Make a light pattern', goal: 5, gap: 200, speed: 195, gravity: 930, flap: 365, lives: 3,
+    badge: 'Sparkle Maker', promise: 'The lagoon is sleepy. Every gate you clear sends Bolt a sparkle!',
+    milestone: 0, effect: 'Bolt flashes twice whenever you clear a gate. Your repeat block makes the pattern happen on the real robot.',
+    hint: 'Inside pipe, add repeat 2. Inside the repeat: light OFF → wait 100 ms → light ON → wait 100 ms. Keep start and stop from mission 1.',
     handlers: [{ message: 'start', actions: [light('ON')] },
-      { message: 'pipe', actions: [repeat(2, [light('OFF'), delay(100), light('ON'), delay(100)])] },
-      { message: 'stop', actions: safety() }] },
-  { id: 3, name: 'Robot celebration', skill: 'Coordinated motors & safe stops', goal: 7, gap: 160, speed: 220, gravity: 1150, flap: 410,
-    milestone: 3, effect: 'Pipes change the light. At 3 and 6 points the robot performs two short, self-stopping motor pulses.',
-    hint: 'Inside milestone, repeat twice: both motors forward 35, wait 120 ms, stop both motors, wait 120 ms. Then random light.',
+      { message: 'pipe', actions: [repeat(2, [light('OFF'), delay(100), light('ON'), delay(100)])] }, lightEnd()] },
+  { id: 3, name: 'Rescue the stars', world: 'Starlight Summit', skill: 'Teach Bolt a rescue hop', goal: 7, gap: 170, speed: 225, gravity: 1070, flap: 395, lives: 3,
+    badge: 'Star Rescuer', promise: 'Pip finds the stars in the sky. Bolt takes a little rescue hop on the ground!',
+    milestone: 3, effect: 'At gates 3 and 6, Bolt rolls twice in short pulses. Each roll stops its own wheels. Play on a clear floor with an adult.',
+    hint: 'Inside milestone: repeat 2 → roll FORWARD at 35 for 120 ms → wait 120 ms. Put random light after the repeat. Because this mission uses wheels, stop must park wheels and turn the light OFF.',
     handlers: [{ message: 'start', actions: [light('ON')] }, { message: 'pipe', actions: [light('RANDOM')] },
-      { message: 'milestone', actions: [repeat(2, [motor('LEFT'), motor('RIGHT'), delay(120), stop('LEFT'), stop('RIGHT'), delay(120)]), light('RANDOM')] },
-      { message: 'stop', actions: safety() }] }
+      { message: 'milestone', actions: [repeat(2, [{kind:'pulse', direction:'FORWARD', speed:35, ms:120}, delay(120)]), light('RANDOM')] },
+      { message: 'stop', actions: [{kind:'park'}, light('OFF')] }] }
 ];
 export const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 export const byteLength = (value: string): number => new TextEncoder().encode(value).length;
@@ -51,6 +55,8 @@ export function chain(blocks: BlockJSON[]): BlockJSON | undefined {
 function actionBlock(a: Action): BlockJSON {
   switch (a.kind) {
     case 'light': return { type: 'flappy_light', fields: { STATE: a.state } };
+    case 'pulse': return { type: 'flappy_drive_pulse', fields: { DIR: a.direction, SPEED: a.speed, MS: a.ms } };
+    case 'park': return { type: 'flappy_park' };
     case 'motor': return { type: 'flappy_motor', fields: { SIDE: a.side, DIR: a.direction, SPEED: a.speed } };
     case 'stop': return { type: 'flappy_motor_stop', fields: { SIDE: a.side } };
     case 'delay': return { type: 'flappy_delay', fields: { MS: a.ms } };
@@ -65,7 +71,7 @@ export function example(stage: Stage): Snapshot {
   }))) } };
   return s;
 }
-const ALLOWED = new Set(['flappy_device_program', 'flappy_on_message', 'flappy_light', 'flappy_motor', 'flappy_motor_stop', 'flappy_delay', 'flappy_device_repeat']);
+const ALLOWED = new Set(['flappy_device_program', 'flappy_on_message', 'flappy_light', 'flappy_motor', 'flappy_motor_stop', 'flappy_delay', 'flappy_device_repeat', 'flappy_drive_pulse', 'flappy_park']);
 function pick(b: BlockJSON, name: string, allowed: string[]): string {
   const value = b.fields?.[name];
   if (typeof value !== 'string' || !allowed.includes(value)) throw new Error(`${b.type}: invalid ${name}.`);
@@ -101,6 +107,8 @@ export function parseProgram(raw: unknown): Handler[] {
     for (let b = first; b; b = b.next?.block) {
       switch (b.type) {
         case 'flappy_light': inspect(b, [], ['STATE']); result.push({ kind: 'light', state: pick(b, 'STATE', ['ON', 'OFF', 'RANDOM']) }); break;
+        case 'flappy_drive_pulse': inspect(b, [], ['DIR','SPEED','MS']); result.push({kind:'pulse', direction:pick(b,'DIR',['FORWARD','BACKWARD']), speed:number(b,'SPEED',0,50), ms:number(b,'MS',20,300)}); break;
+        case 'flappy_park': inspect(b, [], []); result.push({kind:'park'}); break;
         case 'flappy_motor': inspect(b, [], ['SIDE', 'DIR', 'SPEED']); result.push({ kind: 'motor', side: pick(b, 'SIDE', ['LEFT', 'RIGHT']), direction: pick(b, 'DIR', ['FORWARD', 'BACKWARD']), speed: number(b, 'SPEED', 0, 100) }); break;
         case 'flappy_motor_stop': inspect(b, [], ['SIDE']); result.push({ kind: 'stop', side: pick(b, 'SIDE', ['LEFT', 'RIGHT']) }); break;
         case 'flappy_delay': inspect(b, [], ['MS']); result.push({ kind: 'delay', ms: number(b, 'MS', 0, 10000) }); break;
@@ -156,6 +164,12 @@ export function generate(raw: unknown, vocabulary = VOCAB): string {
     return list.map(a => {
       switch (a.kind) {
         case 'light': return `${pad}${name(a.state)}()\n`;
+        case 'park': return `${pad}${name('LEFT_STOP')}(0)\n${pad}${name('RIGHT_STOP')}(0)\n`;
+        case 'pulse': {
+          usesTime = true;
+          // Both wheel starts have matching stops, even if an action in the pulse fails.
+          return `${pad}try:\n${pad}  ${name('LEFT_' + a.direction)}(${a.speed})\n${pad}  ${name('RIGHT_' + a.direction)}(${a.speed})\n${pad}  time.sleep_ms(${a.ms})\n${pad}finally:\n${pad}  ${name('LEFT_STOP')}(0)\n${pad}  ${name('RIGHT_STOP')}(0)\n`;
+        }
         case 'motor': return `${pad}${name(a.side + '_' + a.direction)}(${a.speed})\n`;
         case 'stop': return `${pad}${name(a.side + '_STOP')}(0)\n`;
         case 'delay': usesTime = true; return `${pad}time.sleep_ms(${a.ms})\n`;
@@ -171,20 +185,27 @@ export function generate(raw: unknown, vocabulary = VOCAB): string {
 export function registerBlocks(B: any): void {
   const statement = { previousStatement: null, nextStatement: null, colour: 160, helpUrl: '' };
   B.defineBlocksWithJsonArray([
-    { type: 'flappy_device_program', message0: 'Crowbot device program %1', args0: [{ type: 'input_statement', name: 'BODY' }], colour: 210 },
-    { type: 'flappy_on_message', message0: 'when game message %1 do %2', args0: [{ type: 'field_input', name: 'MESSAGE', text: 'start' }, { type: 'input_statement', name: 'DO' }], ...statement, colour: 210 },
-    { type: 'flappy_light', message0: 'device light %1', args0: [{ type: 'field_dropdown', name: 'STATE', options: [['on', 'ON'], ['off', 'OFF'], ['random', 'RANDOM']] }], ...statement },
+    { type: 'flappy_device_program', message0: 'Bolt’s program %1 %2', args0: [{type:'input_dummy'}, { type: 'input_statement', name: 'BODY' }], colour: 210 },
+    { type: 'flappy_on_message', message0: 'when game says %1 %2 %3', args0: [{ type: 'field_input', name: 'MESSAGE', text: 'start' }, {type:'input_dummy'}, { type: 'input_statement', name: 'DO' }], ...statement, colour: 210 },
+    { type: 'flappy_light', message0: 'Bolt’s light %1', args0: [{ type: 'field_dropdown', name: 'STATE', options: [['on', 'ON'], ['off', 'OFF'], ['random', 'RANDOM']] }], ...statement },
     { type: 'flappy_motor', message0: '%1 motor %2 speed %3', args0: [{ type: 'field_dropdown', name: 'SIDE', options: [['left', 'LEFT'], ['right', 'RIGHT']] }, { type: 'field_dropdown', name: 'DIR', options: [['forward', 'FORWARD'], ['backward', 'BACKWARD']] }, { type: 'field_number', name: 'SPEED', value: 35, min: 0, max: 100, precision: 1 }], ...statement },
     { type: 'flappy_motor_stop', message0: 'stop %1 motor', args0: [{ type: 'field_dropdown', name: 'SIDE', options: [['left', 'LEFT'], ['right', 'RIGHT']] }], ...statement },
+    { type: 'flappy_drive_pulse', message0: 'roll %1 at %2 for %3 ms • then stop', args0: [
+      {type:'field_dropdown', name:'DIR', options:[['forward','FORWARD'],['backward','BACKWARD']]},
+      {type:'field_number', name:'SPEED', value:35, min:0, max:50, precision:1},
+      {type:'field_number', name:'MS', value:120, min:20, max:300, precision:1}], ...statement, colour:28,
+      tooltip:'Both wheels start, wait briefly, then both stop on the device. Only use with adult supervision.'},
+    { type: 'flappy_park', message0: 'park Bolt’s wheels', ...statement, colour:28 },
     { type: 'flappy_delay', message0: 'wait %1 ms', args0: [{ type: 'field_number', name: 'MS', value: 100, min: 0, max: 10000, precision: 1 }], ...statement, colour: 120 },
     { type: 'flappy_device_repeat', message0: 'repeat %1 times %2', args0: [{ type: 'field_number', name: 'COUNT', value: 2, min: 1, max: 10, precision: 1 }, { type: 'input_statement', name: 'DO' }], ...statement, colour: 120 }
   ]);
 }
 export function toolbox(stage: Stage): object {
-  const names = ['flappy_device_program', 'flappy_on_message', 'flappy_light', 'flappy_motor_stop'];
-  if (stage.id >= 2) names.push('flappy_device_repeat', 'flappy_delay');
-  if (stage.id >= 3) names.push('flappy_motor');
-  return { kind: 'flyoutToolbox', contents: names.map(type => ({ kind: 'block', type })) };
+  const cat = (name: string, colour: string, names: string[]) => ({kind:'category', name, colour, contents:names.map(type=>({kind:'block',type}))});
+  const contents = [cat('When', '#547ab9', ['flappy_device_program','flappy_on_message']), cat('Lights','#329e84',['flappy_light'])];
+  if(stage.id >= 2) contents.push(cat('Repeat','#8a68c1',['flappy_device_repeat','flappy_delay']));
+  if(stage.id >= 3) contents.push(cat('Wheels','#c78036',['flappy_drive_pulse','flappy_park']));
+  return {kind:'categoryToolbox', contents};
 }
 export interface Progress { schema: 1; selected: number; cleared: boolean[]; assisted: boolean[]; best: number[] }
 export const freshProgress = (): Progress => ({ schema: 1, selected: 1, cleared: [false, false, false], assisted: [false, false, false], best: [0, 0, 0] });

@@ -1,8 +1,0 @@
---- a/source/flappy-ble/static/style.css
-+++ b/source/flappy-ble/static/style.css
-@@ -9 +9,5 @@
- @media (prefers-reduced-motion: reduce){.demoGlow,.demoRobot,.demoSpark{animation:none!important}}
-+
-+/* Blockly injects a more specific drag cursor rule. Retain local URLs and native fallbacks. */
-+.blocklyDragging{cursor:url("./vendor/media/handclosed.cur"), grabbing!important}
-+.blocklyDragging.blocklyDraggingDelete{cursor:url("./vendor/media/handdelete.cur"), no-drop!important}

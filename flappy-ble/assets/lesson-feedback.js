@@ -1,6 +1,8 @@
 function describe(a) {
     switch (a.kind) {
         case 'light': return `light ${a.state.toLowerCase()}`;
+        case 'pulse': return `roll ${a.direction.toLowerCase()} at ${a.speed} for ${a.ms} ms, then stop`;
+        case 'park': return 'park Bolt’s wheels';
         case 'motor': return `${a.side.toLowerCase()} motor ${a.direction.toLowerCase()} at speed ${a.speed}`;
         case 'stop': return `stop ${a.side.toLowerCase()} motor`;
         case 'delay': return `wait ${a.ms} ms`;

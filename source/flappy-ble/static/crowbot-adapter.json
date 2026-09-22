@@ -1,6 +1,6 @@
 {
   "adapterId": "crowbot-esp32-mqtt",
-  "adapterVersion": "4.0.0",
+  "adapterVersion": "5.0.0",
   "evidence": "host-supported plus prompt-supplied firmware findings; physical revision not verified",
   "profileId": "integem-crowbot-mqtt-v1",
   "gatt": {
@@ -47,5 +47,9 @@
   "blockSetId": "flappy-crowbot-device",
   "blockSetVersion": "4.0.0",
   "generatorVersion": "4.0.0",
-  "moduleVersion": "4.0.2"
+  "moduleVersion": "4.0.2",
+  "teachingChanges": {
+    "lightLessonsHaveMotorCalls": false,
+    "motorLesson": "bounded drive-pulse with paired device-side stops; wheel parking only where motors are used"
+  }
 }

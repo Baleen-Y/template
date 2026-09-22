@@ -125,8 +125,7 @@ export class EventPump {
         this.stopTask = null;
         return this.enqueue('start');
     }
-    event(text) { if (!this.terminal && !this.closed)
-        void this.enqueue(text); }
+    event(text) { return !this.terminal && !this.closed ? this.enqueue(text) : Promise.resolve(false); }
     stop() {
         if (this.stopTask)
             return this.stopTask;
@@ -277,7 +276,7 @@ export class Link {
         try {
             const { target } = await this.current(expected);
             const created = await this.sdk.device.upload({ deviceId: target.deviceId, connectionId: target.connectionId,
-                profileId: PROFILE, clientRequestId: crypto.randomUUID(),
+                profileId: PROFILE, clientRequestId: typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join(''),
                 artifact: { kind: 'micropython', source, workspacePolicy: 'replace', workspace: frozen } });
             this.job = created.jobId;
             if (!this.disposed)

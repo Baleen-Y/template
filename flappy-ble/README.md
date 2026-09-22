@@ -1,78 +1,49 @@
-# Flappy BLE — Three-stage Quest 4.0.2
+# Pip & Bolt — Sky Rescue · Flappy BLE 5.0.0
 
-A directly importable iCreator module. Device Blockly programs the physical Crowbot; it is not a browser game-block interpreter.
+A child-facing redesign of the three-stage iCreator device-Blockly course, not a separate host or a browser-only hardware simulator.
 
-## Student workflow
+## The adventure
 
-Choose the unlocked stage → study the read-only Blockly example → assemble your own device program → check the checklist → connect Crowbot → upload this exact program and workspace → play the stage. Clearing a stage unlocks the next one.
+The UI shows one activity at a time: mission map → short illustrated brief → dedicated Blockly workshop → connect/upload launch screen → full-window flight → reward screen. Code, raw device data, readback and resource diagnostics live in the Grown-up tools drawer, not on the child's welcome page. Narrow screens switch between Example and Your blocks tabs rather than squeezing two workspaces side by side.
 
-| Stage | Game | Device lesson |
-|---|---|---|
-| 1 · First light | Pass 3 pipes; gap 235; speed 145; gravity 850 | `start` turns the light on. `stop` stops both motors and switches the light off. Events and action order. |
-| 2 · Signal patterns | Pass 5 pipes; gap 195; speed 180; gravity 1000 | `pipe` repeats a 100 ms off/on pattern twice. Learn repeats and timing. No moving-motor action. |
-| 3 · Robot celebration | Pass 7 pipes; gap 160; speed 220; gravity 1150 | Random light per pipe; at scores 3 and 6 perform two short 35-speed, 120 ms motor pulses, each followed by motor stops and 120 ms rest. Learn coordinated actions and safe stops. |
+Pip is the flying bird. Bolt is the physical Crowbot. Character artwork/brief animations are illustrations, not live device telemetry.
 
-Pipes spawn 2.6 seconds apart. In stage 3, a milestone replaces that pipe's normal feedback rather than queueing both. The final target ends the round and requests STOP. UP/DOWN and Space affect only the game and do not produce BLE traffic.
+1. **Wake the forest:** 3 gates. Teach `start → light on`, `stop → light off`. This lesson contains **no motor-start or motor-stop calls**.
+2. **Send a sparkle:** 5 gates. Clearing a gate sends `pipe`; the uploaded callback repeats a short off/on light pattern twice. Still **no motor calls**.
+3. **Rescue the stars:** 7 gates. Gates 3 and 6 send `milestone`, requesting two short rescue rolls. The new roll block starts both wheels, waits 120 ms, and stops both in a device-side `finally` block. Only this motor-using lesson includes final wheel parking. An adult-supervision/clear-floor checkbox is required before playing or testing motion.
 
-## Examples are not pre-filled answers
+The worlds have distinct palettes/scenery. Flights give three hearts, brief collision recovery, collectible stars, streak feedback, and earned mission stars/badges. Controls are tap/click, Space, or Up; Down remains a keyboard convenience, not an extra primary button. No button-press BLE stream is generated.
 
-Every new stage starts with one empty device-program root. A separate, real Blockly read-only workspace shows the completed example. The stage toolbox exposes only the needed vocabulary. The checker validates message names, action order, values and repeat nesting; it ignores positions/IDs and permits message handlers in a different order.
+## Build, send, then fly
 
-“Stuck? Open a hint” explains the current lesson. Only inside that help section is “Still stuck? Copy completed example.” Copying requires an in-page confirmation, backs up current work, and records example-assisted progress without blocking completion. “Start over (blank)” and “Restore local backup” are separate recovery actions. No native `window.confirm` is used.
+A new mission starts with one empty device-program root. The real Blockly example is read-only. The checker ignores position/IDs and compares the lesson's message handlers, actions, values and nesting. It gives one actionable mismatch at a time. Hint → Still stuck → Use finished example is a deliberate rescue path, with an in-page confirmation and backup, not a pre-filled answer.
 
-## Upload is a real prerequisite
+The upload gate remains real: the current program must match, and the exact frozen Blockly JSON plus Python must receive a `device-confirmed` result through `sdk.device.upload`. Editing semantic blocks, reconnecting, reopening or observing another client's upload invalidates the receipt. No hardware action happens by dragging blocks or opening a preview. An optional **Try Bolt's trick** explicitly sends the lesson messages, then STOP; the user observes actual behavior. The UI does not claim to sense it.
 
-The Start button is gated by a valid current-stage solution and a `device-confirmed` upload result on the current project/device/connection. Changing semantic blocks, selecting another stage, reconnecting, reopening, or observing another client's upload invalidates authorization. Saved upload metadata is diagnostic only; it is never trusted to enable a future session. Moving a block without changing its program does not require a needless upload.
+## Full-window gameplay, not a tiny preview
 
-Upload freezes one actual `Blockly.serialization.workspaces.save` snapshot and generates Python from that same snapshot. It calls the implemented `sdk.device.upload` with `kind: micropython`, `workspacePolicy: replace`, source and the matching raw workspace. Editing during the accepted upload cannot mutate its payload and will require a new upload. Progress uses `watchUpload`/`waitForUpload`; no simulated hardware-success timer is used in the release.
+Starting automatically replaces all editing panels with a fixed, viewport-filling game surface and a 3–2–1 countdown. The Canvas camera follows the viewport aspect ratio. HUD controls include pause, exit and optional browser fullscreen. Browser fullscreen is requested only from its button; denial falls back to the already full-window game. Leaving the game exits module-owned fullscreen. No windows, iframes, parent access or host navigation APIs are created.
 
-A confirmation means the host reported transfer/reload acknowledgement. It is not proof that the robot executed every action, nor is it proof that the installed firmware matches the inspected sources.
+Pause freezes physics and attempts priority STOP. Resume sends start before continuing. Hidden/disposed modules never initiate hardware sends. Hiding cancels an active round, invalidates its receipt and requires attention on return. Closing never disconnects the shared device.
 
-## Device and firmware prerequisites
+## Device transport and safety limits
 
-This adapter targets the inspected Crowbot ESP32 compatibility contract through `integem-crowbot-mqtt-v1`; it is not a universal Bluetooth or Drone program uploader. Function examples are those supplied in `MODULE_SYSTEM_PROMPT(3).md`: `light_turnon`, `light_turnoff`, `light_random`, `moveup_left/right`, `movedown_left/right`, `stopmove_left/right`, and `time.sleep_ms`.
+Only the supplied Crowbot ESP32 compatibility contract is targeted: `integem-crowbot-mqtt-v1`, entry `def MQTT(mqtt_msg, voltage):`, two-space body indentation. The host owns BLE, b/m framing, Unicode chunking, pacing and ACK interpretation. Teaching function names remain replaceable in the module generator, not a host whitelist. The generator submits final Python and the same workspace with `workspacePolicy: replace`.
 
-The Python entry is `def MQTT(mqtt_msg, voltage):` with two-space indentation. The existing firmware adds its command-library import and terminal return. The generator emits final Python; no legacy colon-converter is used. The vocabulary map is isolated in `source/flappy-ble/src/model.ts` and can be replaced for a teacher-maintained compatible command library without changing the transport. New names are not claimed to exist in shipping firmware.
+Ordinary feedback has a one-slot coalescing queue. STOP invalidates pending ordinary events, including one waiting for the rate limit; an already accepted write cannot be preempted. Failed commands are not automatically retried. The grown-up Send STOP action provides an explicit retry; a failed stop blocks another round.
 
-The module never implements b/m framing itself and never directly accesses browser Bluetooth, MQTT, Web Serial, WebUSB, workers, popups or external services. The host owns connections, transfer pacing and acknowledgements.
+A write/ACK is not proof of physical execution. The browser cannot interrupt device-side `sleep_ms`, guarantee a motor stops after a power/library fault, or observe actual displacement. The roll's `finally` is a best-effort program cleanup, not a certified safety mechanism. Supervise the robot on a clear floor, away from edges. Do not put it on a desk simply because a command is brief.
 
-## STOP behavior and physical limitations
+## Readback, recovery and persistence
 
-Only one ordinary event is pending. A terminal STOP drops it, including an event selected but still waiting for the send interval. At most one already-accepted write must finish first. No failed/BUSY operation is automatically retried. The UI exposes Send STOP and blocks another round after a failed stop attempt.
+Grown-up tools retains the real `get_device_block_xml` notification-based workspace readback: bounded streaming UTF-8, connection/project/sequence filtering, first-byte/idle/total timeouts, raw-data preservation and temporary-Blockly validation. An explicit in-page replacement backs up edits. The preview says Generated from recovered blocks, never Device source. Multi-client readback is not exclusive and conflicting activity aborts it.
 
-Device-side blocking waits cannot be interrupted by the browser. Stage 3 actions are brief and self-stopping, but this is not a certified safety mechanism. Supervise the robot in a clear area away from edges. Bluetooth loss, firmware/library faults, device power loss and physical effects cannot be diagnosed from a GATT write receipt.
+The module ID stays `flappy-ble`. v5 uses `course.v5.progress`, `course.v5.stage.1/2/3`, `course.v5.backup`, `course.v5.upload.1/2/3`, `course.v5.medals` and `course.v5.readback.raw`. Existing v4 unlocked/completed progress migrates non-destructively into v5. Old v4 and v3 draft keys are kept, not deleted or silently treated as new light-only solutions. The redesigned lessons have separate new workspaces. Upload receipts are never restored as live device authorization.
 
-Hiding a module cancels the round and timed sends; it does not try to send while hidden. On return, attend to the robot, use Send STOP and upload again. Closing/disposal never disconnects other modules' shared connection. Explicit upload cancellation can disconnect the shared device and leave partial workspace/program state; the UI explains this before cancellation.
+## Build and verification
 
-## Read blocks from device
+Complete editable TypeScript is in `source/flappy-ble/src`. Development uses Node 22, pinned TypeScript 5.8.3, Blockly 8.0.0 and Playwright 1.55.1. `npm ci`, `npm run build`, `npm test`, `npx playwright install chromium`, `npm run test:browser`, `npm run test:media`. Installed releases need no npm, server or internet.
 
-The live SDK notification listener is registered before the exact `get_device_block_xml` request. The bounded stream parser filters device/connection/project, supports split UTF-8 characters and JSON, and rejects mixed or unrelated traffic. Limits: 256 KiB; 5 s first-byte; 5 s idle; 60 s total. Disconnect, project changes, hiding, disposal and conflicting shared activity cancel the read. These are module-side guards, not an exclusive multi-client transaction guarantee.
+All upstream Blockly media, including .cur/GIF/audio, remain local. Audio playback is off. The host must implement the supplied 2026-09-22 resource update. Static CSS URLs are CSS-relative; dynamic Blockly styles use the module-root media path. Packaging still rejects unsafe paths, duplicates, symlinks, secrets/build folders and oversize resources. No font files have been added.
 
-Raw received text is kept in memory and persisted when within storage limits. It is validated against this block set and a temporary Blockly workspace before explicit replacement of current edits. Local backup remains separate and clearly labeled. After restoring, the code pane says “Generated from recovered blocks,” not “Device source.” Actual mqtt.py/main.py readback and arbitrary Python-to-Blockly conversion are not claimed.
-
-## Upgrade and persistence
-
-Same manifest ID `flappy-ble`, version `4.0.0`. Update the existing module from the built `flappy-ble/` folder or ZIP and grant the listed permissions when the host prompts. Do not import the `source/` project as a module.
-
-Course keys are separate: `course.v4.progress`, `course.v4.stage.1/2/3`, `course.v4.backup`, `course.v4.upload.1/2/3`, and `course.v4.readback.raw`. Existing v3 workspace/metadata/high-score keys are not deleted or reinterpreted as lesson programs. Stage drafts have a 64 KiB module limit; metadata is stored separately. Storage failures are visible and current-window edits remain available. Unknown progress schemas are not overwritten.
-
-## Source, build and tests
-
-`source/flappy-ble/src/` contains the full TypeScript implementation, not a partial source reference. Runtime uses locally compiled ES modules and the repository's pinned Blockly 8.0.0 core. All media are local and sounds are disabled. No npm installation, development server or internet is needed by the installed release.
-
-For development in `source/flappy-ble`: `npm install` (or `npm ci` once the checked-in lock exists), `npm run build`, `npm test`, then `npx playwright install chromium` and `npm run test:browser`. Node 22 is used for TypeScript build/test tooling. The GitHub workflow compiles, runs production-code unit/protocol tests, tests the actual bundled Blockly in headless Chromium with an explicitly mocked iCreator SDK, and only then commits the built release on the feature branch.
-
-Local checks include strict TypeScript compilation, production generator/Python syntax checks, exact upload/readback payload loops, parser failure/timeout cases, priority-STOP queue pressure, progress ordering and actual game simulation goals. Browser-test evidence is written by the workflow, not assumed. Physical Crowbot and the actual iCreator App/web module containers remain untested here. See `VERIFICATION.md` in a CI-built release and the workflow logs for the exact checks/environment. No host module-kit validator was available in this repository.
-
-
-## 4.0.2 — updated resource contract, not a course rollback
-
-Requires an installed iCreator App/Web host implementing the **2026-09-22 resource-import update**. The supplied contract says cursors, audio/video, arbitrary extensions and extensionless data can be retained; unknown data MIME is application/octet-stream. Changing a prompt alone does not upgrade an installed host. A legacy importer can still reject this package before its UI opens. Version 4.0.1 remains in downloads for legacy hosts.
-
-The build restores the exact, hash-verified upstream Blockly 8.0.0 core and the **complete upstream media directory**, including three .cur cursors, GIFs and all audio formats. It no longer strips files by extension. Classroom audio playback remains disabled by default as before; preserving audio files does not automatically play them. There are no new device APIs or firmware changes.
-
-Static stylesheet URLs use ./vendor/media/ relative to assets/style.css. Blockly's dynamically inserted styles use ./assets/vendor/media/ relative to module index.html. All custom cursor declarations keep native fallback keywords. No remote/CDN assets are loaded. The resource inventory records byte length and SHA-256 for every bundled media file. Diagnostics → Check bundled resources fetches only these local paths, checks lengths and, when available, SHA-256; errors explain that a current host and a complete package are needed. This is not a host certification or device test.
-
-Additional refinements: checklists now identify the first wrong action/value, missing block or nested repeat difference; **Fit my blocks** recenters the student editor. The three stage drafts, assistance flags, unlocked stages, and best scores retain their existing storage keys and schema. No automatic program reset. Upload authorization must still be renewed after reopening, changing device or changing the program.
-
-Module-owned packaging checks retain traversal, unsafe names, case-insensitive duplicate, symlink, secret/build-folder and size checks. Known OS metadata is ignored and reported. A unique flat or wrapped module root is recognized by the test policy, but the delivered ZIP keeps the preferred flappy-ble/module.json layout. Unknown extensions are **data**, not executable privileges. These checks are separate from the target host's own validator and actual import tests.
+See VERIFICATION.md and CI evidence for actual results. Browser/protocol mocks are explicitly distinct from physical Crowbot, actual iCreator App/Web containers, the official host validator, and host Blob URL mapping. No real-device certification is claimed.

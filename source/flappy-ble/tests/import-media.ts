@@ -29,11 +29,18 @@ page.on('response',r=>{if(r.status()>=400)failed.push(r.status()+' '+r.url());})
 page.on('requestfailed',r=>failed.push(r.url()));
 try{
   await page.goto(url,{waitUntil:'networkidle'});
-  const block=page.locator('#student .blocklyDraggable').first();await block.waitFor();await block.hover();
+  await page.waitForFunction(()=>document.querySelector('#status')?.textContent?.startsWith('Stage '));
+  await page.click('[data-stage="1"]');await page.click('#goBuild');
+  const block=page.locator('#student .blocklyDraggable').first();await block.waitFor();
+  // The empty C-shaped program has a transparent statement socket at its centre.
+  // Interact with its solid title bar, exactly where a child would grab it.
+  await block.hover({position:{x:35,y:14}});
+  const beforeDrag=await block.getAttribute('transform');
   const normal=await block.evaluate(el=>getComputedStyle(el).cursor);
   assert.ok(normal.includes('handopen.cur'));assert.match(normal,/grab/);
   const box=await block.boundingBox();if(!box)throw new Error('Block not visible');
-  await page.mouse.move(box.x+35,box.y+18);await page.mouse.down();await page.mouse.move(box.x+100,box.y+80,{steps:12});await page.mouse.up();
+  await page.mouse.move(box.x+35,box.y+14);await page.mouse.down();await page.mouse.move(box.x+160,box.y+100,{steps:12});await page.mouse.up();
+  assert.notEqual(await block.getAttribute('transform'),beforeDrag,'The real Blockly root must move after dragging its header');
   const css=await page.evaluate(()=>{
     const dynamic=document.querySelector('#blockly-common-style')?.textContent??'';
     const probe=document.createElement('div');probe.className='blocklyDragging blocklyDraggingDelete';document.body.append(probe);
@@ -44,7 +51,7 @@ try{
   assert.ok(css.deletion.includes('handdelete.cur'));assert.match(css.deletion,/no-drop/);
   const cursorUrls=[...css.dynamic.matchAll(/url\(["']?([^"')]*\.cur)["']?\)/g)].map(m=>new URL(m[1],css.base).href);
   assert.ok(cursorUrls.length>=3);assert.ok(cursorUrls.every(v=>v.startsWith(url+'assets/vendor/media/')));
-  await page.locator('.statusPanel details').evaluate(el=>(el as HTMLDetailsElement).open=true);
+  await page.click('#teacherOpen');await page.locator('#teacherDrawer details').last().evaluate(el=>(el as HTMLDetailsElement).open=true);
   await page.click('#checkResources');await page.waitForFunction(()=>document.querySelector('#resourceStatus')?.textContent?.includes('bundled media files passed'));
   assert.ok((await page.locator('#resourceStatus').innerText()).includes('SHA-256'));
   for(const name of ['handclosed.cur','handopen.cur','handdelete.cur','click.ogg','click.mp3','click.wav','1x1.gif'])assert.ok(requests.includes(url+'assets/vendor/media/'+name),name);
@@ -59,10 +66,10 @@ try{
   // Test custom cursor image decoding, not only existence of a URL.
   const image=await page.evaluate(async()=>{const img=new Image();img.src='./assets/vendor/media/handdelete.cur';await img.decode();return {width:img.naturalWidth,height:img.naturalHeight};});
   assert.ok(image.width>0&&image.height>0);
-  await page.click('#fitStudent');
+  await page.click('#teacherClose');await page.click('#fitStudent');
   assert.deepEqual(errors,[]);assert.deepEqual(failed,[]);
   assert.ok(requests.every(v=>v.startsWith(origin)));
-  await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/resources-402.png',fullPage:true});
+  await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/resources-500.png',fullPage:true});
   await writeFile('test-results/import-media.json',JSON.stringify({browser:browser.version(),checks:[
     'complete Blockly media loads at a nested module root, including all three .cur and audio/GIF data',
     'exact upstream Blockly renders and drags; custom cursors retain native fallbacks',

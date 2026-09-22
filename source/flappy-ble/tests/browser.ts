@@ -1,21 +1,13 @@
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
-import { resolve, extname } from 'node:path';
+import { resolve, sep } from 'node:path';
 import assert from 'node:assert/strict';
-const root=resolve('../../flappy-ble');
-await mkdir('test-results',{recursive:true});
-const server=createServer(async(req,res)=>{
-  const name=(req.url??'/').split('?')[0];
-  const path=resolve(root,'.'+(name==='/'?'/index.html':decodeURIComponent(name)));
-  if(!path.startsWith(root+'/')) {res.writeHead(403).end();return;}
-  try {const b=await readFile(path);res.setHeader('Content-Type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.json':'application/json'})[extname(path)]??'application/octet-stream');res.end(b);}
-  catch {res.writeHead(404).end();}
-});
-await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const port=server.address().port,url=`http://127.0.0.1:${port}/`;
-const browser=await chromium.launch({headless:true});
-const checks=[];
+import { mimeFor } from '../release-policy.ts';
+const root=resolve('../../flappy-ble'); await mkdir('test-results',{recursive:true});
+const server=createServer(async(req,res)=>{try{const name=decodeURIComponent((req.url??'/').split('?')[0]);if(name==='/favicon.ico'){res.writeHead(204).end();return;}const file=resolve(root,'.'+(name==='/'?'/index.html':name));if(!file.startsWith(root+sep)){res.writeHead(403).end();return;}res.writeHead(200,{'Content-Type':mimeFor(file)}).end(await readFile(file));}catch{res.writeHead(404).end();}});
+await new Promise(ok=>server.listen(0,'127.0.0.1',ok)); const url=`http://127.0.0.1:${server.address().port}/`;
+const browser=await chromium.launch({headless:true});const checks=[];const errors=[],external=[],failed=[];
 async function mock(page,seed={}) {
   await page.addInitScript(({seed})=>{
     const clone=v=>JSON.parse(JSON.stringify(v));
@@ -51,68 +43,73 @@ async function mock(page,seed={}) {
     };
   },{seed});
 }
+
 async function ready(page){await page.waitForFunction(()=>document.querySelector('#status')?.textContent?.startsWith('Stage '));}
-async function copy(page){await page.locator('#help').evaluate(el=>el.open=true);await page.click('#copyExample');await page.click('#confirmYes');await page.waitForFunction(()=>document.querySelectorAll('#checklist .pending').length===0);}
-async function upload(page){await page.click('#upload');await page.waitForFunction(()=>document.querySelector('#uploadNotice')?.classList.contains('success'));}
-const errors=[],external=[];
-const page=await browser.newPage({viewport:{width:1580,height:1080}});
-page.on('pageerror',e=>errors.push(e.message));
-page.on('request',r=>{if(!r.url().startsWith(url)&&!r.url().startsWith('data:'))external.push(r.url());});
+async function mission(page,id){await page.click(`[data-stage="${id}"]`);await page.waitForFunction(()=>document.body.dataset.screen==='brief');await page.click('#goBuild');await page.waitForFunction(()=>document.body.dataset.screen==='build');}
+async function copy(page){await page.click('#hintButton');assert.equal(await page.locator('#copyExample').isVisible(),false);await page.click('#showRescue');await page.click('#copyExample');await page.click('#confirmYes');await page.waitForFunction(()=>document.querySelector('#goLaunch')&&!document.querySelector('#goLaunch').classList.contains('hidden'));}
+async function upload(page){await page.click('#upload');await page.waitForFunction(()=>document.querySelector('#uploadNotice').classList.contains('success'));}
+const page=await browser.newPage({viewport:{width:1440,height:900}});
+page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(!r.url().startsWith(url)&&!r.url().startsWith('data:'))external.push(r.url());});page.on('response',r=>{if(r.status()>=400)failed.push(r.status()+' '+r.url());});
 try {
-  await mock(page);await page.goto(url);await ready(page);
-  assert.equal(await page.locator('#start').isDisabled(),true);
-  assert.equal(await page.locator('[data-stage="2"]').isDisabled(),true);
-  assert.equal(await page.locator('#copyExample').isVisible(),false);
-  checks.push('new course: blank student workspace, read-only example, hidden rescue copy, locked stages');
-  await page.screenshot({path:'test-results/stage-1-blank.png',fullPage:true});
-  await page.evaluate(()=>window.__mock.cancelChooser=true);await page.click('#connect');await page.waitForFunction(()=>!document.querySelector('#connect').disabled);
-  await page.click('#connect');await page.waitForFunction(()=>document.querySelector('#connection').textContent.includes('Connected'));
-  checks.push('canceled Bluetooth chooser remains retryable');
-  await copy(page);assert.equal(await page.locator('#start').isDisabled(),true);checks.push('example copy still requires upload; in-page confirmation works');
-  await upload(page);assert.equal(await page.locator('#start').isEnabled(),true);
-  const call=await page.evaluate(()=>window.__mock.uploads.at(-1));assert.equal(call.artifact.workspacePolicy,'replace');assert.ok(call.artifact.source.includes('def MQTT(mqtt_msg, voltage):'));
-  checks.push('real Blockly snapshot is paired with generated Python in production SDK upload path');
-  await page.evaluate(()=>{const w=window.Blockly.Workspace.getAll().find(w=>w.getInjectionDiv&&!w.isFlyout&&!w.options.readOnly);w.getAllBlocks(false).find(b=>b.type==='flappy_light').setFieldValue('OFF','STATE');});
-  await page.waitForFunction(()=>document.querySelector('#start').disabled);checks.push('semantic block edits invalidate upload authorization');
-  assert.ok((await page.locator('#checklist').innerText()).includes('expected light on; found light off'));
-  await page.click('#fitStudent');checks.push('specific block mismatch feedback and Fit my blocks work in the real editor');
-  await copy(page);await upload(page);
-  await page.click('#read');await page.waitForSelector('#readResult:not(.hidden)');await page.click('#replaceRead');await page.click('#confirmYes');
-  await page.waitForFunction(()=>document.querySelector('#codeLabel').textContent.includes('recovered'));
-  assert.equal(await page.locator('#start').isDisabled(),true);checks.push('notification readback restores editable Blockly, never treats cached data as device data, re-upload required');
-  await upload(page);
-  // Autopilot supplies flap input only; never changes score, goal or win state.
-  await page.evaluate(async()=>{
-    const {Simulation}=await import('/assets/game.js');const update=Simulation.prototype.update;
-    Simulation.prototype.update=function(dt){const target=this.pipes.find(p=>p.x+90>175)?.center??245;if(this.running&&this.y>target+20&&this.velocity>0)this.up();return update.call(this,dt);};
-  });
-  for(let id=1;id<=3;id++){
-    if(id>1){await page.click('#nextStage');await page.waitForFunction(id=>document.querySelector('#title').textContent.startsWith(id+'.'),id);assert.equal(await page.locator('#start').isDisabled(),true);await copy(page);await upload(page);}
-    if(id===3)await page.check('#safety');
-    await page.screenshot({path:`test-results/stage-${id}-ready.png`,fullPage:true});
-    await page.click('#start');
-    await page.waitForFunction(()=>!document.querySelector('#result').classList.contains('hidden') && /Stage cleared|Course complete/.test(document.querySelector('#resultTitle').textContent),null,{timeout:45000});
-    checks.push(`stage ${id}: real game reaches target, priority STOP sent, completion unlocks next lesson`);
-  }
-  const sends=await page.evaluate(()=>window.__mock.sends.map(x=>x.text));
-  assert.equal(sends.includes('left')||sends.includes('right'),false);assert.equal(sends.at(-1),'stop');checks.push('no per-tap BLE commands and no ordinary event after terminal STOP');
-  const stored=await page.evaluate(()=>window.__mock.stored);assert.deepEqual(stored['course.v4.progress'].cleared,[true,true,true]);
-  const reopened=await browser.newPage({viewport:{width:1280,height:900}});await mock(reopened,stored);await reopened.goto(url);await ready(reopened);
-  assert.equal(await reopened.locator('#start').isDisabled(),true);assert.ok((await reopened.locator('#courseSummary').textContent()).includes('complete'));checks.push('reopen preserves course drafts/progress but never trusts an old upload receipt');
-  assert.equal(stored['course.v4.progress'].schema,1);
-  for(const id of [1,2,3])assert.ok(stored['course.v4.stage.'+id]);
-  checks.push('4.0.1-compatible progress schema and all three draft keys survive the patch update');
-  await reopened.close();
-  await page.setViewportSize({width:700,height:1000});await page.screenshot({path:'test-results/mobile.png',fullPage:true});
-  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1);assert.equal(overflow,false);checks.push('700px responsive layout has no page-width overflow');
-  await page.evaluate(()=>window.__mock.foreignUpload());assert.equal(await page.locator('#start').isDisabled(),true);checks.push('other module upload invalidates the current stage receipt');
-  await page.evaluate(()=>{window.__mock.change({activity:null});window.__mock.hide(false);});
-  const before=await page.evaluate(()=>window.__mock.sends.length);await page.waitForTimeout(200);assert.equal(await page.evaluate(()=>window.__mock.sends.length),before);checks.push('hidden module initiates no BLE sends');
-  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);checks.push('zero uncaught browser errors and zero external runtime network requests');
-  const noSDK=await browser.newPage();await noSDK.goto(url);await noSDK.waitForFunction(()=>document.querySelector('#sdkWarning').textContent.includes('Open this module in iCreator'));assert.equal(await noSDK.locator('#start').isDisabled(),true);await noSDK.close();checks.push('missing-SDK state explains how to open module and disables hardware play');
-  const report={browser:browser.version(),mode:'headless Chromium; real Blockly 8; mocked iCreator SDK; no real hardware/host/GPU certification',checks,passed:true};
-  await writeFile('test-results/browser.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
-} catch(e) {
-  await page.screenshot({path:'test-results/failure.png',fullPage:true}).catch(()=>{});
-  await writeFile('test-results/failure.txt',String(e)+'\n'+JSON.stringify({errors,external,checks})+'\n'+await page.locator('body').innerText());throw e;
-} finally {await browser.close();server.close();}
+ await mock(page);await page.goto(url);await ready(page);
+ assert.equal(await page.locator('#mapScreen').isVisible(),true);assert.equal(await page.locator('#student').isVisible(),false);assert.equal(await page.locator('#game').isVisible(),false);assert.equal(await page.locator('#teacherDrawer').isVisible(),false);
+ assert.equal(await page.locator('[data-stage="2"]').isDisabled(),true);
+ checks.push('quiet child-facing mission map, without editor/game/diagnostics crammed onto the welcome screen');
+ await page.screenshot({path:'test-results/v5-map.png',fullPage:true});
+ await mission(page,1);assert.equal(await page.locator('#game').isVisible(),false);assert.equal(await page.locator('#student').isVisible(),true);
+ assert.equal(await page.evaluate(()=>window.__mock.sends.length),0);assert.equal(await page.locator('#goLaunch').isVisible(),false);
+ checks.push('building is a separate full-size workspace with a read-only example, blank student program and no hardware action on load');
+ await page.screenshot({path:'test-results/v5-build-blank.png',fullPage:true});
+ await page.click('#check');assert.equal(await page.locator('#checkFeedback').isVisible(),true);assert.ok((await page.locator('#checklist').innerText()).includes('start'));
+ await copy(page);await page.screenshot({path:'test-results/v5-build-ready.png',fullPage:true});await page.click('#goLaunch');assert.equal(await page.locator('#start').isDisabled(),true);
+ await page.evaluate(()=>window.__mock.cancelChooser=true);await page.click('#connect');await page.waitForFunction(()=>!document.querySelector('#connect').disabled);await page.click('#connect');await page.waitForFunction(()=>document.querySelector('#connection').classList.contains('good'));
+ await upload(page);assert.equal(await page.locator('#start').isEnabled(),true);
+ const first=await page.evaluate(()=>window.__mock.uploads.at(-1));assert.equal(first.artifact.workspacePolicy,'replace');assert.ok(first.artifact.source.includes('def MQTT(mqtt_msg, voltage):'));assert.equal(/moveup_|movedown_|stopmove_/.test(first.artifact.source),false);
+ checks.push('copy remains last-resort help with in-page confirmation; connection cancellation is retryable; physical upload is required; light lesson contains no motor starts or stops');
+ await page.click('#testRobot');await page.waitForFunction(()=>document.querySelector('#testStatus').textContent.includes('Did you see'));assert.deepEqual(await page.evaluate(()=>window.__mock.sends.map(x=>x.text)),['start','stop']);
+ checks.push('optional Try Bolt test uses the real SDK path only on an explicit click and finishes with STOP');
+ await page.click('#launchBack');await page.evaluate(()=>{const w=window.Blockly.Workspace.getAll().find(w=>w.getInjectionDiv&&!w.isFlyout&&!w.options.readOnly);w.getAllBlocks(false).find(b=>b.type==='flappy_light').setFieldValue('OFF','STATE');});await page.waitForFunction(()=>document.querySelector('#start').disabled);assert.ok((await page.locator('#checklist').innerText()).includes('expected light on; found light off'));
+ await copy(page);await page.click('#goLaunch');await upload(page);
+ checks.push('real semantic Blockly edits invalidate upload authorization and show one actionable mismatch instead of a diagnostic wall');
+ await page.click('#teacherOpen');await page.click('#read');await page.waitForSelector('#readResult:not(.hidden)');await page.click('#replaceRead');await page.click('#confirmYes');await page.waitForFunction(()=>document.body.dataset.screen==='build');assert.equal(await page.locator('#start').isDisabled(),true);
+ assert.ok((await page.locator('#codeLabel').textContent()).includes('recovered'));await page.click('#goLaunch');await upload(page);
+ checks.push('teacher tools retain live fragmented notification readback and editable replacement, with a new upload still required');
+ await page.screenshot({path:'test-results/v5-launch.png',fullPage:true});
+ // Input-only autopilot. Never changes score, geometry, collision, hearts or win state.
+ await page.evaluate(async()=>{const {Simulation}=await import('/assets/game.js');const original=Simulation.prototype.update;Simulation.prototype.update=function(dt){window.__sim=this;const target=this.pipes.find(p=>p.x+90>this.x)?.center??245;if(this.running&&this.y>target+18&&this.velocity>0)this.up();return original.call(this,dt);};});
+ for(let id=1;id<=3;id++){
+   if(id>1){await page.click('#nextStage');await page.waitForFunction(()=>document.body.dataset.screen==='brief');await page.click('#goBuild');await copy(page);await page.click('#goLaunch');await upload(page);}
+   if(id===3){assert.equal(await page.locator('#start').isDisabled(),true);await page.check('#safety');}
+   await page.click('#start');await page.waitForFunction(()=>document.body.dataset.screen==='play');
+   const box=await page.locator('#game').boundingBox();assert.ok(box.width>=1439&&box.height>=899);assert.equal(await page.locator('#boards').isVisible(),false);
+   await page.waitForFunction(()=>!document.querySelector('#up').disabled);
+   if(id===1){
+     await page.evaluate(()=>document.querySelector('#playScreen').requestFullscreen=()=>Promise.reject(new Error('Mock host denies native fullscreen')));await page.click('#fullscreen');assert.equal(await page.locator('#playScreen').isVisible(),true);
+     await page.click('#pause');await page.waitForSelector('#pausePanel:not(.hidden)');const time=await page.evaluate(()=>window.__sim.elapsed);await page.waitForTimeout(250);assert.equal(await page.evaluate(()=>window.__sim.elapsed),time);assert.equal(await page.evaluate(()=>window.__mock.sends.at(-1).text),'stop');await page.click('#resume');await page.waitForFunction(()=>document.querySelector('#pausePanel').classList.contains('hidden')); 
+     checks.push('flight fills the complete module viewport automatically; denied native fullscreen keeps full-window play; pause freezes physics and sends STOP before resume');
+   }
+   await page.waitForTimeout(2800);await page.screenshot({path:`test-results/v5-flight-${id}.png`,fullPage:true});
+   await page.waitForFunction(()=>document.body.dataset.screen==='result'&&/Look what|every world/.test(document.querySelector('#resultTitle').textContent),null,{timeout:50000});
+   assert.equal(await page.locator('#game').isVisible(),false);assert.equal(await page.evaluate(()=>window.__mock.sends.at(-1).text),'stop');
+   checks.push(`mission ${id}: distinct theme, genuine input-only game completion, star rewards, terminal STOP, and next mission unlock`);
+ }
+ await page.screenshot({path:'test-results/v5-result.png',fullPage:true});
+ const calls=await page.evaluate(()=>window.__mock.uploads);assert.ok(calls.at(-1).artifact.source.includes('try:'));assert.ok(calls.at(-1).artifact.source.includes('finally:'));assert.ok(calls.at(-1).artifact.source.includes('moveup_left(35)'));
+ const sends=await page.evaluate(()=>window.__mock.sends.map(x=>x.text));assert.ok(!sends.includes('left')&&!sends.includes('right'));assert.ok(sends.includes('pipe')&&sends.includes('milestone'));
+ const stored=await page.evaluate(()=>window.__mock.stored);assert.deepEqual(stored['course.v5.progress'].cleared,[true,true,true]);assert.ok(stored['course.v5.medals'].every(x=>x>=1));
+ checks.push('robot interaction is low-frequency mission progress, not finger-press spam; moving lesson uses self-stopping pulses and paired final parking');
+ const re=await browser.newPage({viewport:{width:700,height:950}});await mock(re,stored);await re.goto(url);await ready(re);assert.equal(await re.locator('#start').isDisabled(),true);assert.ok(await re.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await re.screenshot({path:'test-results/v5-mobile-map.png',fullPage:true});await mission(re,1);assert.equal(await re.locator('#sample').isVisible(),false);await re.click('#exampleTab');assert.equal(await re.locator('#student').isVisible(),false);await re.click('#yourTab');assert.equal(await re.locator('#student').isVisible(),true);assert.ok(await re.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await re.screenshot({path:'test-results/v5-mobile-build.png',fullPage:true});checks.push('small-screen learning uses example/editor tabs; no horizontal page overflow; reopening keeps drafts and progress but never trusts a stale upload receipt');
+ await re.click('#goLaunch');await re.click('#connect');await upload(re);await re.evaluate(()=>window.__mock.foreignUpload());assert.equal(await re.locator('#start').isDisabled(),true);await re.evaluate(()=>window.__mock.change({activity:null}));await upload(re);
+ const before=await re.evaluate(()=>window.__mock.sends.length);await re.click('#start');await re.waitForTimeout(150);await re.evaluate(()=>window.__mock.hide(false));await re.waitForTimeout(2200);assert.equal(await re.evaluate(()=>window.__mock.sends.length),before);await re.evaluate(()=>window.__mock.hide(true));assert.equal(await re.locator('#start').isDisabled(),true);
+ checks.push('another module upload invalidates play permission; hiding during countdown cancels before any device command and requires attention on return');
+ const oldProgress={schema:1,selected:2,cleared:[true,false,false],assisted:[true,false,false],best:[3,2,0]},oldDraft={original:'old v4 workspace kept intact'};
+ const migration=await browser.newPage();await mock(migration,{'course.v4.progress':oldProgress,'course.v4.stage.1':oldDraft});await migration.goto(url);await ready(migration);assert.equal(await migration.locator('[data-stage="2"]').isEnabled(),true);assert.deepEqual(await migration.evaluate(()=>window.__mock.stored['course.v4.stage.1']),oldDraft);assert.deepEqual(await migration.evaluate(()=>window.__mock.stored['course.v4.progress']),oldProgress);
+ checks.push('v4 unlocked progress migrates without changing old draft/progress keys; new lesson drafts are kept separately');
+ const missing=await browser.newPage();await missing.goto(url);await ready(missing);assert.ok((await missing.locator('#sdkWarning').innerText()).includes('Open this module in iCreator'));assert.equal(await missing.locator('#start').isDisabled(),true);
+ assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.deepEqual(failed,[]);
+ checks.push('missing SDK stays honest; no browser-only hardware impersonation in release; no external requests, missing resources or uncaught browser errors');
+ await writeFile('test-results/browser.json',JSON.stringify({passed:true,browser:browser.version(),mode:'headless Chromium; real bundled Blockly and production ES modules; mocked iCreator SDK; no physical device or real iCreator container certification',checks},null,2));
+}catch(e){await page.screenshot({path:'test-results/v5-failure.png',fullPage:true}).catch(()=>{});await writeFile('test-results/browser-failure.txt',String(e)+'\n'+JSON.stringify({errors,external,failed}));throw e;}
+finally{await browser.close();await new Promise(ok=>server.close(()=>ok()));}

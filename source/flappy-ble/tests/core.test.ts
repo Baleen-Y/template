@@ -19,13 +19,13 @@ test('three increasing game difficulties; all examples pass and blank drafts fai
   assert.ok(STAGES[0].speed<STAGES[1].speed && STAGES[1].speed<STAGES[2].speed);
   for(const stage of STAGES){assert.equal(check(example(stage),stage).ok,true);assert.equal(check(blank(),stage).ok,false);}
 });
-test('position/id changes do not invalidate; wrong values, nested structure and missing stops do',()=>{
+test('position/id changes do not invalidate; wrong values, nested structure and wrong end actions do',()=>{
   const raw=example(STAGES[1]), key=check(raw,STAGES[1]).key;
   eachBlock(raw,b=>{b.id='position-only-'+Math.random();b.x=300;b.y=900;});
   assert.equal(check(raw,STAGES[1]).key,key);
   eachBlock(raw,b=>{if(b.type==='flappy_device_repeat') b.fields.COUNT=3;});
   assert.equal(check(raw,STAGES[1]).ok,false);
-  const bad=example(STAGES[0]);bad.blocks.blocks[0].inputs.BODY.block.next.block.inputs.DO.block= {type:'flappy_light',fields:{STATE:'OFF'}};
+  const bad=example(STAGES[0]);bad.blocks.blocks[0].inputs.BODY.block.next.block.inputs.DO.block= {type:'flappy_light',fields:{STATE:'ON'}};
   assert.equal(check(bad,STAGES[0]).ok,false);
 });
 test('unsupported/disabled/orphan blocks are rejected without altering raw input',()=>{
@@ -110,16 +110,16 @@ function mockSDK(){
 }
 test('real Link/generator payload loop: edit → upload snapshot → fragmented SDK notifications → edit → re-upload',async()=>{
   const m=mockSDK(),link=new Link(m.sdk,ctx,()=>{},()=>{},()=>{});await link.init();
-  const raw=example(STAGES[2]);eachBlock(raw,b=>{if(b.type==='flappy_motor')b.fields.SPEED=36;});
+  const raw=example(STAGES[2]);eachBlock(raw,b=>{if(b.type==='flappy_drive_pulse')b.fields.SPEED=36;});
   const source=generate(raw),key=connectionKey(state());
   const uploadPromise=link.upload(raw,source,key,()=>{});
-  eachBlock(raw,b=>{if(b.type==='flappy_motor')b.fields.SPEED=99;});
+  eachBlock(raw,b=>{if(b.type==='flappy_drive_pulse')b.fields.SPEED=99;});
   assert.equal(await uploadPromise,'device-confirmed');
   assert.ok(m.uploads[0].artifact.source.includes('moveup_left(36)'));
   assert.equal(generate(m.uploads[0].artifact.workspace),m.uploads[0].artifact.source);
   assert.equal(m.uploads[0].artifact.workspacePolicy,'replace');
   const recovered=await link.read();
-  eachBlock(recovered.workspace,b=>{if(b.type==='flappy_motor')b.fields.SPEED=42;});
+  eachBlock(recovered.workspace,b=>{if(b.type==='flappy_drive_pulse')b.fields.SPEED=42;});
   await link.upload(recovered.workspace,generate(recovered.workspace),key,()=>{});
   assert.ok(m.uploads[1].artifact.source.includes('moveup_left(42)'));
   assert.equal(m.sends[0].text,'get_device_block_xml');link.dispose();
@@ -146,7 +146,56 @@ for(const stage of STAGES)test(`production simulation can clear stage ${stage.id
   }
   assert.equal(result,true);assert.equal(sim.score,stage.goal);
 });
-test('collision ends exactly once, before a score or any async storage operation',()=>{
+test('the last heart ends the round exactly once, before async storage work',()=>{
   let count=0;const sim=new Simulation(()=>{},win=>{assert.equal(win,false);count++;});sim.start(STAGES[0]);
-  for(let n=0;n<400;n++)sim.update(1/120);assert.equal(count,1);assert.equal(sim.running,false);
+  for(let n=0;n<1600;n++)sim.update(1/120);assert.equal(count,1);assert.equal(sim.running,false);
+});
+
+
+test('light-only lessons never start OR stop any wheel',()=>{
+ for(const stage of STAGES.slice(0,2)){
+  const code=generate(example(stage)); assert.ok(!/moveup_|movedown_|stopmove_/.test(code));
+  assert.deepEqual(stage.handlers.find(h=>h.message==='stop').actions,[{kind:'light',state:'OFF'}]);
+ }
+});
+test('rescue roll has real starts and paired stops in a device-side finally block',()=>{
+ const code=generate(example(STAGES[2]));
+ assert.match(code,/try:\n/);assert.match(code,/finally:\n/);assert.match(code,/moveup_left\(35\)/);assert.match(code,/stopmove_left\(0\)/);
+ const py=`import sys,types
+code=sys.stdin.read()
+t=types.ModuleType('time');t.sleep_ms=lambda n:None;sys.modules['time']=t
+calls=[]
+def left(n):calls.append('left started')
+def right(n):raise RuntimeError('test motor error')
+ns={'light_turnon':lambda:None,'light_turnoff':lambda:None,'light_random':lambda:None,'moveup_left':left,'moveup_right':right,'stopmove_left':lambda n:calls.append('left stopped'),'stopmove_right':lambda n:calls.append('right stopped')}
+exec(code,ns)
+try:ns['MQTT']('milestone',4)
+except RuntimeError:pass
+assert calls==['left started','left stopped','right stopped'],calls
+`;
+ const p=spawnSync('python3',['-c',py],{input:code,encoding:'utf8'});assert.equal(p.status,0,p.stderr);
+});
+test('pulse limits reject unsafe lesson inputs rather than silently clamping',()=>{
+ for(const [field,value] of [['MS',9000],['SPEED',100],['DIR','UNKNOWN']]){
+  const raw=example(STAGES[2]);eachBlock(raw,b=>{if(b.type==='flappy_drive_pulse')b.fields[field]=value;});assert.throws(()=>generate(raw));
+ }
+});
+test('first bump costs one heart, not the entire flight; shield prevents rapid extra damage',()=>{
+ let ended=0,hits=0;const sim=new Simulation(()=>{},()=>ended++,()=>.5,()=>hits++);sim.start(STAGES[0]);sim.y=495;sim.update(.01);
+ assert.equal(sim.lives,2);assert.equal(sim.running,true);assert.equal(ended,0);assert.equal(hits,1);sim.y=495;sim.update(.01);assert.equal(sim.lives,2);
+});
+test('collectibles and streaks are earned by the simulated bird, not device packets',()=>{
+ const sim=new Simulation(()=>{},()=>{},()=>.5);sim.start(STAGES[0]);sim.pipes=[{x:sim.x-35,center:sim.y,counted:false}];sim.update(.001);
+ assert.equal(sim.stars,1);assert.equal(sim.combo,1);sim.update(.001);assert.equal(sim.stars,1);
+});
+test('portrait and wide viewports use the same simulation without changing scoring to fake a win',()=>{
+ for(const width of [250,400,1200]){
+  let result=null;const sim=new Simulation(()=>{},w=>result=w,()=>.5);sim.width=width;sim.start(STAGES[1]);
+  for(let i=0;i<15000&&sim.running;i++){const target=sim.pipes.find(p=>p.x+90>sim.x)?.center??245;if(sim.y>target+18&&sim.velocity>0)sim.up();sim.update(1/120);}
+  assert.equal(result,true);assert.equal(sim.score,STAGES[1].goal);
+ }
+});
+test('changing lesson vocabulary affects final Python but not host transport contract',()=>{
+ const raw=example(STAGES[2]),code=generate(raw,{...VOCAB,LEFT_FORWARD:'teacher_left_roll'});
+ assert.ok(code.includes('teacher_left_roll(35)'));assert.ok(!code.includes('moveup_left(35)'));assert.ok(code.includes('def MQTT(mqtt_msg, voltage):'));
 });
