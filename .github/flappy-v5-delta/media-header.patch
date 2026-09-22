@@ -1,0 +1,21 @@
+--- a/source/flappy-ble/tests/import-media.ts
++++ b/source/flappy-ble/tests/import-media.ts
+@@ -31,11 +31,16 @@
+   await page.goto(url,{waitUntil:'networkidle'});
+   await page.waitForFunction(()=>document.querySelector('#status')?.textContent?.startsWith('Stage '));
+   await page.click('[data-stage="1"]');await page.click('#goBuild');
+-  const block=page.locator('#student .blocklyDraggable').first();await block.waitFor();await block.hover();
++  const block=page.locator('#student .blocklyDraggable').first();await block.waitFor();
++  // The empty C-shaped program has a transparent statement socket at its centre.
++  // Interact with its solid title bar, exactly where a child would grab it.
++  await block.hover({position:{x:35,y:14}});
++  const beforeDrag=await block.getAttribute('transform');
+   const normal=await block.evaluate(el=>getComputedStyle(el).cursor);
+   assert.ok(normal.includes('handopen.cur'));assert.match(normal,/grab/);
+   const box=await block.boundingBox();if(!box)throw new Error('Block not visible');
+-  await page.mouse.move(box.x+35,box.y+18);await page.mouse.down();await page.mouse.move(box.x+100,box.y+80,{steps:12});await page.mouse.up();
++  await page.mouse.move(box.x+35,box.y+14);await page.mouse.down();await page.mouse.move(box.x+160,box.y+100,{steps:12});await page.mouse.up();
++  assert.notEqual(await block.getAttribute('transform'),beforeDrag,'The real Blockly root must move after dragging its header');
+   const css=await page.evaluate(()=>{
+     const dynamic=document.querySelector('#blockly-common-style')?.textContent??'';
+     const probe=document.createElement('div');probe.className='blocklyDragging blocklyDraggingDelete';document.body.append(probe);
