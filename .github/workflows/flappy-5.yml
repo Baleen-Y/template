@@ -32,6 +32,9 @@ jobs:
             pathlib.Path('/tmp/flappy-v5.patch').write_bytes(patch)
             subprocess.run(['git','apply','--check','/tmp/flappy-v5.patch'],check=True)
             subprocess.run(['git','apply','/tmp/flappy-v5.patch'],check=True)
+            for fix in sorted(folder.glob('*.patch')):
+              subprocess.run(['git','apply','--check',str(fix)],check=True)
+              subprocess.run(['git','apply',str(fix)],check=True)
           PY
       - uses: actions/setup-node@v4
         with:
