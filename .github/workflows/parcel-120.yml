@@ -18,10 +18,12 @@ jobs:
       - name: Apply reviewed source changes with before and after checksums
         run: |
           python3 - <<'PY'
-          import pathlib,json,base64,lzma,hashlib
+          import pathlib,json,base64,lzma,hashlib,subprocess
           folder=pathlib.Path('.github/parcel120-delta')
           digest=lambda b:hashlib.sha256(b).hexdigest()
           if folder.exists():
+            lock_path=pathlib.Path('source/crowbot-parcel-pals/package-lock.json')
+            original_lock=json.loads(lock_path.read_text())
             parts=sorted(folder.glob('*.txt')); assert len(parts)==3
             raw=lzma.decompress(base64.b64decode(''.join(p.read_text().strip() for p in parts),validate=True))
             assert digest(raw)=='ae166046f4450eb7effdf5992b5e72aba64a10311f10b83d81d14995b6d78ede'
@@ -39,6 +41,9 @@ jobs:
                   chunks.append(old[op[0]:op[1]])
               new=''.join(chunks);assert digest(new.encode())==item['after'],name
               path.parent.mkdir(parents=True,exist_ok=True);path.write_text(new,encoding='utf-8')
+            # Bump only the application, never third-party dependency versions/URLs.
+            original_lock['version']=original_lock['packages']['']['version']='1.2.0'
+            lock_path.write_text(json.dumps(original_lock,indent=2)+'\n')
           PY
       - uses: actions/setup-node@v4
         with:
