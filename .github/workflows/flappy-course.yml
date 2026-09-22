@@ -1,0 +1,73 @@
+name: Build and test Flappy course
+on:
+  push:
+    branches: [flappy-ble-v4]
+    paths: ['source/flappy-ble/**', '.github/workflows/flappy-course.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: flappy-course-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned development dependencies
+        working-directory: source/flappy-ble
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Compile the real TypeScript release
+        working-directory: source/flappy-ble
+        run: npm run build
+      - name: Unit, generator and protocol mock tests
+        working-directory: source/flappy-ble
+        run: |
+          mkdir -p test-results
+          set -o pipefail
+          npm test | tee test-results/core.tap
+      - name: Install test browser
+        working-directory: source/flappy-ble
+        run: npx playwright install --with-deps chromium
+      - name: Real Blockly browser tests with mocked iCreator SDK
+        working-directory: source/flappy-ble
+        run: npm run test:browser
+      - name: Record verification and package
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, zipfile
+          report=json.loads(pathlib.Path('source/flappy-ble/test-results/browser.json').read_text())
+          text='# Verification — Flappy BLE 4.0.0\n\n'
+          text+='Source commit: '+os.environ['SOURCE_COMMIT']+'\n\n'
+          text+='Strict TypeScript build and production-code unit/protocol tests completed successfully.\n\n'
+          text+='Browser: '+report['browser']+'\n\n'+report['mode']+'\n\n'
+          text+='\n'.join('- '+x for x in report['checks'])+'\n\n'
+          text+='Actual iCreator desktop/web host, physical BLE hardware and real-GPU compatibility: NOT TESTED. No host module-kit validator is present in this repository.\n'
+          pathlib.Path('flappy-ble/VERIFICATION.md').write_text(text)
+          pathlib.Path('downloads').mkdir(exist_ok=True)
+          with zipfile.ZipFile('downloads/flappy-ble-4.0.0.zip','w',zipfile.ZIP_DEFLATED) as z:
+            for p in pathlib.Path('flappy-ble').rglob('*'):
+              if p.is_file(): z.write(p,p.as_posix())
+          PY
+      - name: Commit only the tested release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add flappy-ble downloads/flappy-ble-4.0.0.zip source/flappy-ble/package-lock.json
+          git diff --cached --quiet || git commit -m "Build verified Flappy BLE 4.0.0 release"
+          git push origin HEAD:${{ github.ref_name }}
+      - name: Keep test evidence and release package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flappy-course-evidence
+          path: |
+            source/flappy-ble/test-results
+            downloads/flappy-ble-4.0.0.zip
+          retention-days: 30

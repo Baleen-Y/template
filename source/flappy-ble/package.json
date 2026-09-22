@@ -1,0 +1,16 @@
+{
+  "name": "flappy-ble-course",
+  "private": true,
+  "version": "4.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node --experimental-strip-types build.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:browser": "node --experimental-strip-types tests/browser.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3",
+    "playwright": "1.55.1",
+    "blockly": "8.0.0"
+  }
+}
