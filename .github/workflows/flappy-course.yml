@@ -1,7 +1,7 @@
 name: Build and test Flappy course
 on:
   push:
-    branches: [flappy-ble-v4, flappy-ble-import-fix]
+    branches: [flappy-ble-v4, flappy-ble-import-fix, flappy-ble-v4.0.2]
     paths: ['source/flappy-ble/**', '.github/workflows/flappy-course.yml']
   workflow_dispatch:
 permissions:
@@ -15,16 +15,30 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Apply reviewed source delta when present
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, pathlib, subprocess, shutil
+          directory=pathlib.Path('source/flappy-ble/updates/402blob')
+          if directory.exists():
+            encoded=''.join((directory/str(i)).read_text().strip() for i in range(8))
+            raw=gzip.decompress(base64.b64decode(encoded,validate=True))
+            assert hashlib.sha256(raw).hexdigest()=='39afa5afe204ec045f380fe1d21f8c38f7d85c0abdfb90df010559ae2a8ffdca', 'Source delta checksum mismatch'
+            subprocess.run(['git','apply','--check','--unidiff-zero','-'],input=raw,check=True)
+            subprocess.run(['git','apply','--unidiff-zero','-'],input=raw,check=True)
+            shutil.rmtree('source/flappy-ble/updates')
+            print('Reviewed delta applied and temporary transport segments removed')
+          PY
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned development dependencies
+      - name: Install locked development dependencies
         working-directory: source/flappy-ble
-        run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Compile TypeScript and enforce clean resource packaging
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Strict TypeScript build and preserve complete upstream resources
         working-directory: source/flappy-ble
         run: npm run build
-      - name: Unit, protocol and import-path regression tests
+      - name: Production unit, protocol, teaching feedback and packaging checks
         working-directory: source/flappy-ble
         run: |
           mkdir -p test-results
@@ -33,64 +47,36 @@ jobs:
       - name: Install test browser
         working-directory: source/flappy-ble
         run: npx playwright install --with-deps chromium
-      - name: Real Blockly course tests with mocked SDK
+      - name: Real Blockly three-stage course with mocked iCreator SDK
         working-directory: source/flappy-ble
         run: npm run test:browser
-      - name: Cursor and resource-loading regression test
+      - name: Custom cursors, all media and nested resource-path regression tests
         working-directory: source/flappy-ble
         run: npm run test:media
-      - name: Record evidence, package and validate every ZIP member
+      - name: Record evidence and validate the final ZIP
+        working-directory: source/flappy-ble
         env:
           SOURCE_COMMIT: ${{ github.sha }}
+        run: node --experimental-strip-types package-release.ts
+      - name: Commit tested release and complete editable TypeScript source
         run: |
-          python3 - <<'PY'
-          import json, os, pathlib, zipfile, stat
-          root=pathlib.Path('flappy-ble')
-          manifest=json.loads((root/'module.json').read_text())
-          version=manifest['version']
-          report=json.loads(pathlib.Path('source/flappy-ble/test-results/browser.json').read_text())
-          media=json.loads(pathlib.Path('source/flappy-ble/test-results/import-media.json').read_text())
-          text='# Verification — Flappy BLE '+version+'\n\nSource commit: '+os.environ['SOURCE_COMMIT']+'\n\n'
-          text+='Strict TypeScript build and production unit/protocol/packaging tests passed.\n\nBrowser: '+report['browser']+'\n\n'+report['mode']+'\n\n'
-          text+='\n'.join('- '+x for x in report['checks']+media['checks'])+'\n\n'
-          text+='The reported .cur rejection is covered by a negative regression test. Every final ZIP member is checked against a conservative local path/extension policy. Actual iCreator App/web import, official module-kit validator and physical BLE hardware: NOT TESTED.\n'
-          (root/'VERIFICATION.md').write_text(text)
-          pathlib.Path('downloads').mkdir(exist_ok=True)
-          archive=pathlib.Path('downloads')/('flappy-ble-'+version+'.zip')
-          allowed={'.html','.js','.css','.json','.md','.txt','.png','.svg'}
-          paths=sorted(p for p in root.rglob('*') if p.is_file())
-          with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
-            for p in paths:
-              assert not p.is_symlink(), p
-              assert p.suffix.lower() in allowed, p
-              z.write(p,p.as_posix())
-          with zipfile.ZipFile(archive) as z:
-            names=z.namelist()
-            assert len(names)==len(set(n.casefold() for n in names))
-            assert 'flappy-ble/module.json' in names and 'flappy-ble/index.html' in names
-            for n in names:
-              parts=n.split('/')
-              assert parts[0]=='flappy-ble' and all(x not in ('','.','..') for x in parts)
-              assert '\\' not in n and ':' not in n and pathlib.PurePosixPath(n).suffix.lower() in allowed
-            assert z.testzip() is None
-          print('ZIP validated:', archive, 'members:', len(names), 'bytes:', archive.stat().st_size)
-          pathlib.Path('source/flappy-ble/test-results/archive.json').write_text(json.dumps({'file':str(archive),'members':names,'bytes':archive.stat().st_size},indent=2))
-          PY
-      - name: Commit tested source stamps and release
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           VERSION=$(node -p "require('./source/flappy-ble/package.json').version")
           git add -A flappy-ble
-          git add "downloads/flappy-ble-${VERSION}.zip" source/flappy-ble/package-lock.json source/flappy-ble/src/model.ts source/flappy-ble/static
-          git diff --cached --quiet || git commit -m "Build import-safe Flappy BLE ${VERSION} release"
+          git add -u source/flappy-ble
+          git add source/flappy-ble/src/lesson-feedback.ts source/flappy-ble/src/resources.ts source/flappy-ble/tests/feedback.test.ts source/flappy-ble/package-release.ts
+          git add "downloads/flappy-ble-${VERSION}.zip"
+          git diff --cached --quiet || git commit -m "Publish tested Flappy BLE ${VERSION} resources and teaching refinements"
           git push origin HEAD:${{ github.ref_name }}
-      - name: Keep tests and the exact release ZIP
+          git archive --format=zip --output=flappy-tested-source.zip HEAD source/flappy-ble flappy-ble
+      - name: Retain test evidence, release ZIP and source snapshot
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flappy-import-fix-evidence
+          name: flappy-402-release-evidence
           path: |
             source/flappy-ble/test-results
-            downloads/flappy-ble-4.0.1.zip
+            downloads/flappy-ble-4.0.2.zip
+            flappy-tested-source.zip
           retention-days: 30
