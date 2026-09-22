@@ -1,0 +1,91 @@
+name: Verify Parcel Pals 1.2 Route Cruise
+on:
+  push:
+    branches: [parcel-pals-1.2]
+    paths: ['source/crowbot-parcel-pals/**', '.github/workflows/parcel-120.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: parcel-120-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply reviewed source changes with before and after checksums
+        run: |
+          python3 - <<'PY'
+          import pathlib,json,base64,lzma,hashlib
+          folder=pathlib.Path('.github/parcel120-delta')
+          digest=lambda b:hashlib.sha256(b).hexdigest()
+          if folder.exists():
+            parts=sorted(folder.glob('*.txt')); assert len(parts)==3
+            raw=lzma.decompress(base64.b64decode(''.join(p.read_text().strip() for p in parts),validate=True))
+            assert digest(raw)=='ae166046f4450eb7effdf5992b5e72aba64a10311f10b83d81d14995b6d78ede'
+            items=json.loads(raw); assert len(items)==15
+            for item in items:
+              name=item['path'];path=pathlib.Path(name)
+              assert name.startswith('source/crowbot-parcel-pals/') and not path.is_absolute() and '..' not in path.parts
+              old=path.read_text(encoding='utf-8') if path.exists() else ''
+              assert digest(old.encode())==item['before'],name
+              chunks=[]
+              for op in item['ops']:
+                if isinstance(op,str): chunks.append(op)
+                else:
+                  assert len(op)==2 and all(isinstance(x,int) for x in op) and 0<=op[0]<=op[1]<=len(old)
+                  chunks.append(old[op[0]:op[1]])
+              new=''.join(chunks);assert digest(new.encode())==item['after'],name
+              path.parent.mkdir(parents=True,exist_ok=True);path.write_text(new,encoding='utf-8')
+          PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked development dependencies
+        working-directory: source/crowbot-parcel-pals
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Compile complete TypeScript release
+        working-directory: source/crowbot-parcel-pals
+        run: npm run build
+      - name: Unit, pacing, pause, resume, cancellation and Python callback tests
+        working-directory: source/crowbot-parcel-pals
+        run: |
+          mkdir -p test-results
+          set -o pipefail
+          npm test | tee test-results/core.tap
+      - name: Install test browser
+        working-directory: source/crowbot-parcel-pals
+        run: npx playwright install --with-deps chromium
+      - name: Real Blockly UI and three missions with explicitly mocked SDK
+        working-directory: source/crowbot-parcel-pals
+        run: npm run test:browser
+      - name: Package only after all tests pass
+        working-directory: source/crowbot-parcel-pals
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: node --experimental-strip-types package-release.ts
+      - name: Commit tested release and editable source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A crowbot-parcel-pals source/crowbot-parcel-pals
+          git add downloads/crowbot-parcel-pals-1.2.0.zip
+          git rm -r --ignore-unmatch .github/parcel120-delta
+          if git diff --cached --name-only | grep -E '(^|/)(node_modules|test-results)(/|$)|\.(ttf|woff2?|otf)$'; then
+            echo 'Unexpected dependency/test/font file staged'; exit 1
+          fi
+          git diff --cached --quiet || git commit -m "Release Parcel Pals 1.2.0: guided first lesson, one-start route cruise next"
+          git push origin HEAD:${{ github.ref_name }}
+          git archive --format=zip --output=parcel-120-tested-source.zip HEAD source/crowbot-parcel-pals crowbot-parcel-pals .github/workflows/parcel-120.yml
+      - name: Retain actual test evidence and exact delivery ZIP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parcel-120-evidence
+          path: |
+            source/crowbot-parcel-pals/test-results
+            downloads/crowbot-parcel-pals-1.2.0.zip
+            parcel-120-tested-source.zip
+          retention-days: 30
