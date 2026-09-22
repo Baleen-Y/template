@@ -1,3 +1,4 @@
+import { verifyResources } from './resources.js';
 import { VERSION, PROFILE, BLOCK_SET, STAGES, Stage, Snapshot, Check, Progress, blank, example, check, generate, registerBlocks, toolbox, clone, byteLength, freshProgress, readProgress, unlocked } from './model.js';
 import { SDK, State, Context, Link, EventPump, connectionKey, errorText, Off, DataEvent } from './device.js';
 import { GameView } from './game.js';
@@ -346,6 +347,14 @@ function bind(): void {
   listen('check', () => { assess(); status(assessment.ok ? 'Blocks match! Upload this stage to the device before playing.' : 'Not finished yet. Compare the highlighted checklist with the example; a hint is available below.'); });
   listen('copyExample', () => replaceEditor('copy')); listen('reset', () => replaceEditor('reset')); listen('restoreBackup', () => replaceEditor('backup'));
   listen('fitExample', () => { sample?.zoomToFit(); if (sample?.scale < 0.45) sample.setScale(0.45); });
+  listen('fitStudent', () => { student?.zoomToFit(); if (student?.scale < 0.45) student.setScale(0.45); });
+  listen('checkResources', async () => {
+    const button = $<HTMLButtonElement>('checkResources'); button.disabled = true;
+    $('resourceStatus').textContent = 'Checking packaged local resources…';
+    try { $('resourceStatus').textContent = await verifyResources(listeners.signal); }
+    catch (e) { if (!disposed) { $('resourceStatus').textContent = 'Local resource check failed: ' + errorText(e) + '. Confirm that iCreator includes the 2026-09-22 resource-import update, then update the module from the complete ZIP.'; fail('Local resource check', e); } }
+    finally { if (!disposed) button.disabled = false; }
+  });
   listen('start', start); listen('stop', manualStop); listen('nextStage', () => selectStage(stage.id + 1));
   listen('up', () => game?.sim.up()); listen('down', () => game?.sim.down());
   listen('retryGraphics', () => { createGame(); refresh(); });

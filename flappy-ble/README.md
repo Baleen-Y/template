@@ -1,4 +1,4 @@
-# Flappy BLE — Three-stage Quest 4.0.1
+# Flappy BLE — Three-stage Quest 4.0.2
 
 A directly importable iCreator module. Device Blockly programs the physical Crowbot; it is not a browser game-block interpreter.
 
@@ -65,8 +65,14 @@ For development in `source/flappy-ble`: `npm install` (or `npm ci` once the chec
 Local checks include strict TypeScript compilation, production generator/Python syntax checks, exact upload/readback payload loops, parser failure/timeout cases, priority-STOP queue pressure, progress ordering and actual game simulation goals. Browser-test evidence is written by the workflow, not assumed. Physical Crowbot and the actual iCreator App/web module containers remain untested here. See `VERIFICATION.md` in a CI-built release and the workflow logs for the exact checks/environment. No host module-kit validator was available in this repository.
 
 
-## 4.0.1 import packaging fix
+## 4.0.2 — updated resource contract, not a course rollback
 
-The previous ZIP included Blockly legacy Windows cursor assets (.cur), which the iCreator importer rejected. The build now cleans the media directory and copies only PNG/SVG images. Unused audio and GIF files are omitted because the editor has sounds disabled. Eight legacy cursor URL declarations in the pinned Blockly 8.0.0 bundle are replaced with native grab/grabbing/no-drop cursors; original license notices are retained.
+Requires an installed iCreator App/Web host implementing the **2026-09-22 resource-import update**. The supplied contract says cursors, audio/video, arbitrary extensions and extensionless data can be retained; unknown data MIME is application/octet-stream. Changing a prompt alone does not upgrade an installed host. A legacy importer can still reject this package before its UI opens. Version 4.0.1 remains in downloads for legacy hosts.
 
-A release-path policy and negative regression tests reject unsupported files, duplicates and symlinks before ZIP delivery. This is a conservative module-owned packaging check, not the unavailable official host validator. The curriculum, stage drafts, progress keys, upload/readback and priority STOP behavior are unchanged.
+The build restores the exact, hash-verified upstream Blockly 8.0.0 core and the **complete upstream media directory**, including three .cur cursors, GIFs and all audio formats. It no longer strips files by extension. Classroom audio playback remains disabled by default as before; preserving audio files does not automatically play them. There are no new device APIs or firmware changes.
+
+Static stylesheet URLs use ./vendor/media/ relative to assets/style.css. Blockly's dynamically inserted styles use ./assets/vendor/media/ relative to module index.html. All custom cursor declarations keep native fallback keywords. No remote/CDN assets are loaded. The resource inventory records byte length and SHA-256 for every bundled media file. Diagnostics → Check bundled resources fetches only these local paths, checks lengths and, when available, SHA-256; errors explain that a current host and a complete package are needed. This is not a host certification or device test.
+
+Additional refinements: checklists now identify the first wrong action/value, missing block or nested repeat difference; **Fit my blocks** recenters the student editor. The three stage drafts, assistance flags, unlocked stages, and best scores retain their existing storage keys and schema. No automatic program reset. Upload authorization must still be renewed after reopening, changing device or changing the program.
+
+Module-owned packaging checks retain traversal, unsafe names, case-insensitive duplicate, symlink, secret/build-folder and size checks. Known OS metadata is ignored and reported. A unique flat or wrapped module root is recognized by the test policy, but the delivered ZIP keeps the preferred flappy-ble/module.json layout. Unknown extensions are **data**, not executable privileges. These checks are separate from the target host's own validator and actual import tests.

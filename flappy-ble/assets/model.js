@@ -1,4 +1,5 @@
-export const VERSION = '4.0.1';
+import { explainDifference } from './lesson-feedback.js';
+export const VERSION = '4.0.2';
 export const PROFILE = 'integem-crowbot-mqtt-v1';
 export const BLOCK_SET = 'flappy-crowbot-device';
 export const MAX_DRAFT = 64 * 1024;
@@ -149,7 +150,9 @@ export function check(raw, stage) {
         const lines = stage.handlers.map(expected => {
             const actual = handlers.find(h => h.message === expected.message);
             const ok = !!actual && JSON.stringify(actual.actions) === JSON.stringify(expected.actions);
-            return { ok, text: ok ? `${expected.message}: matches the example` : `${expected.message}: check block order, values and nesting against the example` };
+            return { ok, text: ok ? `${expected.message}: matches the example` : !actual
+                    ? `Add a message handler named "${expected.message}" inside the device program.`
+                    : `${expected.message}: ${explainDifference(expected.actions, actual.actions)}` };
         });
         const extra = handlers.filter(h => !stage.handlers.some(e => e.message === h.message));
         if (extra.length)

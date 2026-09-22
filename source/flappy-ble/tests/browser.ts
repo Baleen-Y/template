@@ -74,6 +74,8 @@ try {
   checks.push('real Blockly snapshot is paired with generated Python in production SDK upload path');
   await page.evaluate(()=>{const w=window.Blockly.Workspace.getAll().find(w=>w.getInjectionDiv&&!w.isFlyout&&!w.options.readOnly);w.getAllBlocks(false).find(b=>b.type==='flappy_light').setFieldValue('OFF','STATE');});
   await page.waitForFunction(()=>document.querySelector('#start').disabled);checks.push('semantic block edits invalidate upload authorization');
+  assert.ok((await page.locator('#checklist').innerText()).includes('expected light on; found light off'));
+  await page.click('#fitStudent');checks.push('specific block mismatch feedback and Fit my blocks work in the real editor');
   await copy(page);await upload(page);
   await page.click('#read');await page.waitForSelector('#readResult:not(.hidden)');await page.click('#replaceRead');await page.click('#confirmYes');
   await page.waitForFunction(()=>document.querySelector('#codeLabel').textContent.includes('recovered'));
@@ -97,6 +99,9 @@ try {
   const stored=await page.evaluate(()=>window.__mock.stored);assert.deepEqual(stored['course.v4.progress'].cleared,[true,true,true]);
   const reopened=await browser.newPage({viewport:{width:1280,height:900}});await mock(reopened,stored);await reopened.goto(url);await ready(reopened);
   assert.equal(await reopened.locator('#start').isDisabled(),true);assert.ok((await reopened.locator('#courseSummary').textContent()).includes('complete'));checks.push('reopen preserves course drafts/progress but never trusts an old upload receipt');
+  assert.equal(stored['course.v4.progress'].schema,1);
+  for(const id of [1,2,3])assert.ok(stored['course.v4.stage.'+id]);
+  checks.push('4.0.1-compatible progress schema and all three draft keys survive the patch update');
   await reopened.close();
   await page.setViewportSize({width:700,height:1000});await page.screenshot({path:'test-results/mobile.png',fullPage:true});
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1);assert.equal(overflow,false);checks.push('700px responsive layout has no page-width overflow');

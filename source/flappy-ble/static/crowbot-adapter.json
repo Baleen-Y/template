@@ -1,11 +1,51 @@
 {
-  "adapterId": "crowbot-esp32-mqtt", "adapterVersion": "4.0.0",
+  "adapterId": "crowbot-esp32-mqtt",
+  "adapterVersion": "4.0.0",
   "evidence": "host-supported plus prompt-supplied firmware findings; physical revision not verified",
   "profileId": "integem-crowbot-mqtt-v1",
-  "gatt": {"serviceUuid":"00001848-0000-1000-8000-00805f9b34fb","writeCharacteristicUuid":"00002a6e-0000-1000-8000-00805f9b34fb","receiveCharacteristicUuid":"00002a6e-0000-1000-8000-00805f9b34fb","writeMode":"with-response"},
-  "artifact": {"kind":"micropython","entryPoint":"MQTT","exampleSignature":"def MQTT(mqtt_msg, voltage):","workspacePolicy":"replace","sourceLimitBytes":131072,"workspaceLimitBytes":262144,"lessonWorkspaceLimitBytes":65536,"firmwarePrepends":"from libs.command import *","firmwareAppends":"two-space-indented return 0"},
-  "transport": {"owner":"iCreator host","moduleImplementsFraming":false,"wire":"existing b/m protocol","ack":"upload:ok/upload:error managed by host","meaning":"transfer/reload acknowledgment, not proof of hardware execution","identicalWriteSuppressionMs":2000,"hostIdenticalUploadPacingMs":2100},
-  "runtimeEvents": {"start":"begin round","pipe":"passed pipe; only stages defining this handler","milestone":"stage 3 at scores 3 and 6, instead of pipe","stop":"terminal priority event"},
-  "readback": {"request":"get_device_block_xml","maxBytes":262144,"firstByteTimeoutMs":5000,"idleTimeoutMs":5000,"totalTimeoutMs":60000,"exclusiveTransaction":false,"actualPythonSourceReadback":false},
-  "blockSetId":"flappy-crowbot-device","blockSetVersion":"4.0.0","generatorVersion":"4.0.0"
+  "gatt": {
+    "serviceUuid": "00001848-0000-1000-8000-00805f9b34fb",
+    "writeCharacteristicUuid": "00002a6e-0000-1000-8000-00805f9b34fb",
+    "receiveCharacteristicUuid": "00002a6e-0000-1000-8000-00805f9b34fb",
+    "writeMode": "with-response"
+  },
+  "artifact": {
+    "kind": "micropython",
+    "entryPoint": "MQTT",
+    "exampleSignature": "def MQTT(mqtt_msg, voltage):",
+    "workspacePolicy": "replace",
+    "sourceLimitBytes": 131072,
+    "workspaceLimitBytes": 262144,
+    "lessonWorkspaceLimitBytes": 65536,
+    "firmwarePrepends": "from libs.command import *",
+    "firmwareAppends": "two-space-indented return 0"
+  },
+  "transport": {
+    "owner": "iCreator host",
+    "moduleImplementsFraming": false,
+    "wire": "existing b/m protocol",
+    "ack": "upload:ok/upload:error managed by host",
+    "meaning": "transfer/reload acknowledgment, not proof of hardware execution",
+    "identicalWriteSuppressionMs": 2000,
+    "hostIdenticalUploadPacingMs": 2100
+  },
+  "runtimeEvents": {
+    "start": "begin round",
+    "pipe": "passed pipe; only stages defining this handler",
+    "milestone": "stage 3 at scores 3 and 6, instead of pipe",
+    "stop": "terminal priority event"
+  },
+  "readback": {
+    "request": "get_device_block_xml",
+    "maxBytes": 262144,
+    "firstByteTimeoutMs": 5000,
+    "idleTimeoutMs": 5000,
+    "totalTimeoutMs": 60000,
+    "exclusiveTransaction": false,
+    "actualPythonSourceReadback": false
+  },
+  "blockSetId": "flappy-crowbot-device",
+  "blockSetVersion": "4.0.0",
+  "generatorVersion": "4.0.0",
+  "moduleVersion": "4.0.2"
 }

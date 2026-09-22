@@ -1,3 +1,4 @@
+import { verifyResources } from './resources.js';
 import { VERSION, PROFILE, BLOCK_SET, STAGES, blank, example, check, generate, registerBlocks, toolbox, clone, byteLength, freshProgress, readProgress, unlocked } from './model.js';
 import { Link, EventPump, connectionKey, errorText } from './device.js';
 import { GameView } from './game.js';
@@ -603,6 +604,26 @@ function bind() {
     listen('restoreBackup', () => replaceEditor('backup'));
     listen('fitExample', () => { sample?.zoomToFit(); if (sample?.scale < 0.45)
         sample.setScale(0.45); });
+    listen('fitStudent', () => { student?.zoomToFit(); if (student?.scale < 0.45)
+        student.setScale(0.45); });
+    listen('checkResources', async () => {
+        const button = $('checkResources');
+        button.disabled = true;
+        $('resourceStatus').textContent = 'Checking packaged local resources…';
+        try {
+            $('resourceStatus').textContent = await verifyResources(listeners.signal);
+        }
+        catch (e) {
+            if (!disposed) {
+                $('resourceStatus').textContent = 'Local resource check failed: ' + errorText(e) + '. Confirm that iCreator includes the 2026-09-22 resource-import update, then update the module from the complete ZIP.';
+                fail('Local resource check', e);
+            }
+        }
+        finally {
+            if (!disposed)
+                button.disabled = false;
+        }
+    });
     listen('start', start);
     listen('stop', manualStop);
     listen('nextStage', () => selectStage(stage.id + 1));
