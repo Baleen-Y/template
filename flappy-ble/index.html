@@ -1,135 +1,45 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Flappy BLE Device Blockly</title>
-  <link rel="stylesheet" href="./assets/style.css" />
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Flappy BLE · Three-stage Quest</title>
+  <link rel="stylesheet" href="./assets/style.css">
 </head>
 <body>
   <main class="app">
     <header class="topbar">
-      <div>
-        <div class="eyebrow">iCreator · Device Blockly</div>
-        <h1>Flappy BLE</h1>
-        <p class="subtitle">Play in the browser while the physical Crowbot reacts to meaningful game-state events instead of every button press.</p>
-      </div>
-      <div class="device-bar">
-        <span id="deviceStatus" class="status disconnected">Disconnected</span>
-        <button id="connectBtn" class="secondary">Connect Bluetooth</button>
-        <button id="disconnectBtn" class="ghost" disabled>Disconnect</button>
-      </div>
+      <div class="brand"><span class="brandmark" aria-hidden="true">↗</span><div><div class="eyebrow">ICREATOR · CODE & PLAY</div><h1>Flappy Quest <span id="version" class="version">v4.0.0</span></h1></div></div>
+      <div class="connectionbar"><span id="connection" class="chip">Not connected</span><button id="connect" class="secondary">Connect Crowbot</button><button id="disconnect" class="quiet" disabled>Disconnect</button></div>
     </header>
-
-    <section id="sdkWarning" class="warning hidden">Open this module in iCreator.</section>
-
-    <section class="layout">
-      <section class="game-side">
-        <div class="game-toolbar card">
-          <div class="score-box">
-            <div><span>Score</span><strong id="score">0</strong></div>
-            <div><span>Best</span><strong id="best">0</strong></div>
-          </div>
-          <button id="startBtn" class="primary">Start Game</button>
+    <p id="sdkWarning" class="warning" role="status"></p>
+    <nav class="stages" aria-label="Course stages">
+      <button data-stage="1" class="stage selected"><span class="stageNumber">01</span><span><b>First light</b><em>Easy · 3 pipes</em><small>Available</small></span></button>
+      <button data-stage="2" class="stage" disabled><span class="stageNumber">02</span><span><b>Signal patterns</b><em>Medium · 5 pipes</em><small>Locked</small></span></button>
+      <button data-stage="3" class="stage" disabled><span class="stageNumber">03</span><span><b>Robot celebration</b><em>Hard · 7 pipes</em><small>Locked</small></span></button>
+    </nav>
+    <div class="lessonHeading"><div><span id="skill" class="eyebrow">Events & sequencing</span><h2 id="title">1. First light</h2><p id="effect">Learn the message events that control your physical robot.</p></div><div id="courseSummary" class="courseSummary">0 / 3 stages complete</div></div>
+    <div class="learningSteps" aria-label="Lesson workflow"><span id="buildStep"><i>1</i> Build the example</span><span id="uploadStep"><i>2</i> Upload to device</span><span id="playStep"><i>3</i> Beat the stage</span></div>
+    <div class="layout">
+      <section class="study">
+        <div id="boards" class="boards">
+          <article class="board example"><div class="boardHead"><div><span class="eyebrow">LOOK & LEARN</span><h3 id="sampleLabel">Stage 1 example — read only</h3></div><button id="fitExample" class="tiny">Fit</button></div><div id="sample" class="blocklyHost" aria-label="Read-only example workspace"></div><p class="boardFoot">Study the connections, values and action order. Scroll to see the whole example.</p></article>
+          <article class="board student"><div class="boardHead"><div><span class="eyebrow">YOUR TURN</span><h3>Your device program</h3></div><button id="save" class="tiny">Save</button></div><div class="studentWrap"><div id="student" class="blocklyHost" aria-label="Editable student Blockly workspace"></div><div id="editorShield" class="editorShield hidden">Finish this operation or round before editing.</div></div><div class="boardFoot actions"><button id="check" class="primary small">Check my blocks</button><button id="reset" class="quiet small">Start over (blank)</button></div></article>
         </div>
-
-        <div class="game-card card">
-          <div class="canvas-wrap">
-            <canvas id="gameCanvas" width="900" height="520"></canvas>
-            <div id="overlay" class="overlay">
-              <div class="overlay-card">
-                <h2 id="overlayTitle">Flappy BLE</h2>
-                <p id="overlayText">Connect and upload a device program. UP/DOWN control only the bird; the robot reacts to game state.</p>
-                <button id="overlayStartBtn" class="primary">Start Game</button>
-              </div>
-            </div>
-          </div>
-          <div class="controls">
-            <button id="upBtn" class="control-btn up">↑<span>UP · bird only</span></button>
-            <button id="downBtn" class="control-btn down">↓<span>DOWN · bird only</span></button>
-          </div>
-          <div class="event-strip">
-            <span>Game start: <code>start</code></span>
-            <span>Pass pipe: <code>pipe</code></span>
-            <span>Every 5 points: <code>milestone</code></span>
-            <span>Game over: <code>stop</code> (priority)</span>
-          </div>
-        </div>
-
-        <div class="log-card card">
-          <div class="section-title-row">
-            <div>
-              <h2>Game & BLE log</h2>
-              <p>The browser sends low-frequency state events. STOP clears pending normal events and is sent next after any in-flight write.</p>
-            </div>
-            <button id="clearLogBtn" class="tiny">Clear</button>
-          </div>
-          <div id="commandLog" class="log"></div>
-        </div>
+        <div class="lessonTools card"><div><h3>Your checklist</h3><p class="subtle">Message-handler order can differ. Each handler’s actions, values and nesting should match the example.</p></div><div id="checklist"></div><details id="help" class="help"><summary>Stuck? Open a hint</summary><p id="hint"></p><div class="helpActions"><button id="copyExample" class="secondary">Still stuck? Copy completed example</button><button id="restoreBackup" class="quiet">Restore local backup</button></div><p class="subtle">Copy is optional help, not the first step. Your current work is backed up. Assisted completion is recorded without blocking progress.</p></details></div>
+        <details class="codeCard card"><summary>Generated device Python</summary><p id="codeLabel" class="subtle">Generated from your device blocks</p><pre id="python"></pre><p class="subtle">These blocks program the physical Crowbot callback. The browser never executes this Python.</p></details>
       </section>
-
-      <section class="device-side">
-        <div class="editor-card card">
-          <div class="editor-head">
-            <div>
-              <div class="eyebrow">Physical Device Program</div>
-              <h2>Crowbot Blockly</h2>
-              <p>These blocks generate the Python callback that is uploaded to the physical device.</p>
-            </div>
-            <div class="editor-actions">
-              <button id="saveBtn" class="secondary">Save Local</button>
-              <button id="restoreDefaultsBtn" class="ghost">Restore v3.1.2 Defaults</button>
-            </div>
-          </div>
-
-          <div id="defaultsBanner" class="defaults-banner hidden">
-            <div>
-              <strong id="defaultsBannerTitle">Saved Blockly preserved</strong>
-              <span id="defaultsBannerText">Current default template: v3.1.2</span>
-            </div>
-            <button id="defaultsBannerBtn" class="secondary">Restore v3.1.2 Defaults</button>
-          </div>
-
-          <div id="blocklyDiv" class="blockly-host"></div>
-
-          <div class="editor-footer">
-            <span id="workspaceStatus">Loading Blockly…</span>
-            <span id="blocklyVersion"></span>
-          </div>
-        </div>
-
-        <div class="code-card card">
-          <div class="section-title-row">
-            <div>
-              <h2>Generated device Python</h2>
-              <p>This exact generated source is paired with the frozen workspace when you upload.</p>
-            </div>
-            <span id="codeStatus" class="pill">Preview</span>
-          </div>
-          <pre id="codePreview" class="code-preview"></pre>
-        </div>
-
-        <div class="transfer-card card">
-          <div class="transfer-buttons">
-            <button id="uploadBtn" class="primary" disabled>Upload to Device</button>
-            <button id="readBtn" class="secondary" disabled>Read Blocks from Device</button>
-            <button id="cancelUploadBtn" class="ghost hidden">Cancel Upload</button>
-          </div>
-          <div class="progress-row">
-            <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-            <span id="transferStatus">Idle</span>
-          </div>
-          <p class="fineprint">Upload replaces the device's saved Blockly workspace and its Crowbot MQTT callback together. Readback retrieves the saved workspace only; regenerated Python is labeled as generated from recovered blocks.</p>
-        </div>
-      </section>
-    </section>
+      <aside class="playPanel">
+        <section class="gameCard card"><div class="boardHead"><div><span class="eyebrow">FLIGHT CHALLENGE</span><h3>Build first. Then fly.</h3></div><strong id="score">0 / 3</strong></div><div class="canvasWrap"><canvas id="game" width="900" height="520" tabindex="0" aria-label="Flappy game. Use Up, Down or Space to control the bird."></canvas><div id="gameOverlay" class="gameOverlay"><strong>Your next flight starts<br>with your own program.</strong><span>Build → Upload → Play</span></div></div><p id="goal" class="goal">Pass 3 pipes</p><progress id="scoreProgress" value="0" max="3"></progress><p id="best" class="subtle">Stage best: 0</p><div class="controls"><button id="up" disabled>↑ UP</button><button id="down" disabled>↓ DOWN</button></div><p class="subtle centered">Arrow keys / Space / tap the game. No BLE message is sent per tap.</p><button id="retryGraphics" class="secondary hidden">Retry Canvas 2D graphics</button></section>
+        <section class="transfer card"><h3>Upload before playing</h3><p id="uploadNotice" class="notice" aria-live="polite">Build the example and check your blocks first.</p><button id="upload" class="primary wide" disabled>Upload this stage to device</button><progress id="transferProgress" value="0" max="100"></progress><div class="actions"><button id="read" class="quiet" disabled>Read blocks from device</button><button id="cancel" class="quiet" disabled>Cancel transfer</button></div><label id="safetyRow" class="safety hidden"><input id="safety" type="checkbox">The robot is supervised in a clear area, away from edges.</label><button id="start" class="play wide" disabled>Start this stage</button><button id="stop" class="danger wide" disabled>Send STOP / End round</button><p class="subtle">Changing the program, stage or connection requires a new upload. Upload ACK and a sent STOP are not proof of physical execution. Brief motor actions stop themselves; device-side waits still cannot be interrupted by this browser.</p></section>
+        <section id="result" class="result card hidden" aria-live="polite"><span class="eyebrow">FLIGHT REPORT</span><h3 id="resultTitle"></h3><p id="resultText"></p><button id="nextStage" class="primary wide hidden">Continue to the next stage →</button></section>
+        <section id="readResult" class="card readResult hidden"><h3>Device workspace received</h3><p id="readText"></p><button id="replaceRead" class="secondary">Replace editor</button><button id="keepEdits" class="quiet">Keep my edits</button></section>
+      </aside>
+    </div>
+    <section class="statusPanel card"><p id="status" role="status" aria-live="polite">Opening course…</p><p id="storageWarning" class="warning"></p><p id="legacy" class="subtle"></p><details><summary>Diagnostics & transfer limitations</summary><p class="subtle">Legacy readback is not an exclusive multi-client transaction. Conflicting activity cancels the read. No failed hardware command is automatically retried. Hidden modules do not send STOP; a hidden round is canceled and requires attention on return.</p><label><input id="showHex" type="checkbox">Show latest notification HEX (on-screen only)</label><pre id="hex"></pre><div id="log" class="log"></div></details></section>
   </main>
-
+  <div id="confirmBox" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmTitle"><section><h2 id="confirmTitle">Before continuing</h2><p id="confirmText"></p><div class="actions"><button id="confirmNo" class="quiet">Keep current work / Cancel</button><button id="confirmYes" class="primary">Continue</button></div></section></div>
   <script src="./assets/vendor/blockly_compressed.js"></script>
-  <script src="./assets/vendor/blocks_compressed.js"></script>
   <script src="./assets/vendor/en.js"></script>
-  <script src="./assets/device-blocks.js"></script>
-  <script src="./assets/crowbot-adapter.js"></script>
-  <script src="./assets/main.js"></script>
+  <script type="module" src="./assets/main.js"></script>
 </body>
 </html>

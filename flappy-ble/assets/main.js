@@ -1,1277 +1,742 @@
-(() => {
-  'use strict';
-
-  const VERSION = '3.1.2';
-  const WORKSPACE_KEY = 'deviceWorkspace.v3';
-  const META_KEY = 'deviceWorkspace.meta.v3';
-  const BACKUP_KEY = 'deviceWorkspace.backup.v3';
-  const READBACK_KEY = 'deviceReadback.raw.v3';
-  const BEST_KEY = 'bestScore';
-  const MAX_WORKSPACE_BYTES = 256 * 1024;
-  const MAX_READ_BYTES = 256 * 1024;
-  const FIRST_BYTE_TIMEOUT = 5000;
-  const IDLE_TIMEOUT = 5000;
-  const TOTAL_TIMEOUT = 60000;
-  const BLE_MIN_INTERVAL = 120;
-
-  const $ = (id) => document.getElementById(id);
-  const canvas = $('gameCanvas');
-  const ctx = canvas.getContext('2d');
-
-  const ui = {
-    sdkWarning: $('sdkWarning'),
-    deviceStatus: $('deviceStatus'),
-    connectBtn: $('connectBtn'),
-    disconnectBtn: $('disconnectBtn'),
-    startBtn: $('startBtn'),
-    overlayStartBtn: $('overlayStartBtn'),
-    overlay: $('overlay'),
-    overlayTitle: $('overlayTitle'),
-    overlayText: $('overlayText'),
-    upBtn: $('upBtn'),
-    downBtn: $('downBtn'),
-    score: $('score'),
-    best: $('best'),
-    commandLog: $('commandLog'),
-    clearLogBtn: $('clearLogBtn'),
-    blocklyDiv: $('blocklyDiv'),
-    saveBtn: $('saveBtn'),
-    restoreDefaultsBtn: $('restoreDefaultsBtn'),
-    defaultsBanner: $('defaultsBanner'),
-    defaultsBannerTitle: $('defaultsBannerTitle'),
-    defaultsBannerText: $('defaultsBannerText'),
-    defaultsBannerBtn: $('defaultsBannerBtn'),
-    workspaceStatus: $('workspaceStatus'),
-    blocklyVersion: $('blocklyVersion'),
-    codePreview: $('codePreview'),
-    codeStatus: $('codeStatus'),
-    uploadBtn: $('uploadBtn'),
-    readBtn: $('readBtn'),
-    cancelUploadBtn: $('cancelUploadBtn'),
-    progressBar: $('progressBar'),
-    transferStatus: $('transferStatus')
-  };
-
-  let sdk = null;
-  let sdkContext = null;
-  let latestState = null;
-  let workspace = null;
-  let disposed = false;
-  let visible = true;
-  let offState = null;
-  let offVisibility = null;
-  let resizeObserver = null;
-  let saveTimer = null;
-  let uploadJobId = null;
-  let readbackActive = null;
-  let bleLastSendAt = 0;
-  let gameSendInFlight = false;
-  let pendingGameEvent = null;
-  let urgentStopPending = false;
-
-  const game = {
-    mode: 'ready',
-    score: 0,
-    best: 0,
-    lastFrame: 0,
-    spawnTimer: 0,
-    bird: {x: 180, y: 250, vy: 0, r: 18},
-    pipes: [],
-    particles: []
-  };
-
-  function log(message, type = 'muted') {
+import { VERSION, PROFILE, BLOCK_SET, STAGES, blank, example, check, generate, registerBlocks, toolbox, clone, byteLength, freshProgress, readProgress, unlocked } from './model.js';
+import { Link, EventPump, connectionKey, errorText } from './device.js';
+import { GameView } from './game.js';
+const $ = (id) => {
+    const el = document.getElementById(id);
+    if (!el)
+        throw new Error('Missing UI element: ' + id);
+    return el;
+};
+const B = window.Blockly;
+let sdk = null, context = null, link = null;
+let student = null, sample = null, game = null;
+let progress = freshProgress(), stage = STAGES[0], assessment = check(blank(), stage);
+let loading = true, disposed = false, visible = true, localBusy = false, protectedDraft = false;
+let editorReady = false, progressWritable = true, recoveredKey = '';
+let mode = 'idle';
+let receipt = null;
+let roundConnection = '', lastConnection = '', stopFault = false;
+let winTicket = null;
+let pump = null, saveTimer = null;
+let storageTail = Promise.resolve();
+const drafts = new Map();
+let backup = null;
+let pendingRead = null;
+let confirmResolve = null, previousFocus = null;
+const listeners = new AbortController(), lifecycleOff = [];
+let resize = null;
+const draftKey = (id) => `course.v4.stage.${id}`;
+function log(text, error = false) {
+    if (disposed)
+        return;
     const row = document.createElement('div');
-    row.className = type;
-    row.textContent = '[' + new Date().toLocaleTimeString() + '] ' + message;
-    ui.commandLog.appendChild(row);
-    while (ui.commandLog.childElementCount > 180) {
-      ui.commandLog.removeChild(ui.commandLog.firstChild);
-    }
-    ui.commandLog.scrollTop = ui.commandLog.scrollHeight;
-  }
-
-  function fail(operation, error) {
-    const message = error && error.message ? error.message : String(error || 'Unknown error');
-    console.error('[Flappy BLE v' + VERSION + '] ' + operation + ' failed', error);
-    log(operation + ' failed: ' + message, 'err');
-    return message;
-  }
-
-  function setTransfer(message, progress = 0) {
-    ui.transferStatus.textContent = message;
-    ui.progressBar.style.width = Math.max(0, Math.min(100, progress)) + '%';
-  }
-
-  function setWorkspaceStatus(message, type = '') {
-    ui.workspaceStatus.textContent = message;
-    ui.workspaceStatus.className = type;
-  }
-
-  function updateScore() {
-    ui.score.textContent = String(game.score);
-    ui.best.textContent = String(game.best);
-  }
-
-  function starterWorkspace() {
-    return {
-      blocks: {
-        languageVersion: 0,
-        blocks: [{
-          type: 'flappy_device_program',
-          id: 'device_root',
-          x: 36,
-          y: 32,
-          inputs: {
-            BODY: {
-              block: {
-                type: 'flappy_on_message',
-                id: 'on_start',
-                fields: {MESSAGE: 'start'},
-                inputs: {
-                  DO: {
-                    block: {
-                      type: 'flappy_light',
-                      id: 'start_light',
-                      fields: {STATE: 'ON'}
-                    }
-                  }
-                },
-                next: {
-                  block: {
-                    type: 'flappy_on_message',
-                    id: 'on_pipe',
-                    fields: {MESSAGE: 'pipe'},
-                    inputs: {
-                      DO: {
-                        block: {
-                          type: 'flappy_light',
-                          id: 'pipe_light',
-                          fields: {STATE: 'RANDOM'}
-                        }
-                      }
-                    },
-                    next: {
-                      block: {
-                        type: 'flappy_on_message',
-                        id: 'on_milestone',
-                        fields: {MESSAGE: 'milestone'},
-                        inputs: {
-                          DO: {
-                            block: {
-                              type: 'flappy_motor',
-                              id: 'milestone_left',
-                              fields: {SIDE: 'LEFT', DIR: 'FORWARD', SPEED: 60},
-                              next: {
-                                block: {
-                                  type: 'flappy_motor',
-                                  id: 'milestone_right',
-                                  fields: {SIDE: 'RIGHT', DIR: 'FORWARD', SPEED: 60},
-                                  next: {
-                                    block: {
-                                      type: 'flappy_delay',
-                                      id: 'milestone_delay',
-                                      fields: {MS: 300},
-                                      next: {
-                                        block: {
-                                          type: 'flappy_motor_stop',
-                                          id: 'milestone_stop_left',
-                                          fields: {SIDE: 'LEFT'},
-                                          next: {
-                                            block: {
-                                              type: 'flappy_motor_stop',
-                                              id: 'milestone_stop_right',
-                                              fields: {SIDE: 'RIGHT'},
-                                              next: {
-                                                block: {
-                                                  type: 'flappy_light',
-                                                  id: 'milestone_light',
-                                                  fields: {STATE: 'RANDOM'}
-                                                }
-                                              }
-                                            }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        },
-                        next: {
-                          block: {
-                            type: 'flappy_on_message',
-                            id: 'on_stop',
-                            fields: {MESSAGE: 'stop'},
-                            inputs: {
-                              DO: {
-                                block: {
-                                  type: 'flappy_motor_stop',
-                                  id: 'stop_left',
-                                  fields: {SIDE: 'LEFT'},
-                                  next: {
-                                    block: {
-                                      type: 'flappy_motor_stop',
-                                      id: 'stop_right',
-                                      fields: {SIDE: 'RIGHT'},
-                                      next: {
-                                        block: {
-                                          type: 'flappy_light',
-                                          id: 'stop_light',
-                                          fields: {STATE: 'OFF'}
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }]
-      }
+    row.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
+    row.className = error ? 'log-error' : '';
+    const box = $('log');
+    box.append(row);
+    while (box.childElementCount > 100)
+        box.firstElementChild?.remove();
+    box.scrollTop = box.scrollHeight;
+}
+function fail(op, e) {
+    console.error(`[Flappy BLE ${VERSION}] ${op}`, e);
+    log(`${op}: ${errorText(e)}`, true);
+    $('status').textContent = `${op}: ${errorText(e)}`;
+}
+function status(text) { $('status').textContent = text; }
+function touchAllowed() { return visible && !disposed && mode === 'idle' && !localBusy && !link?.operation; }
+function snapshot() { if (!student)
+    throw new Error('Blockly is not ready.'); return clone(B.serialization.workspaces.save(student)); }
+function saveValue(key, value) {
+    const frozen = clone(value);
+    const task = async () => {
+        if (!sdk || disposed || (key === 'course.v4.progress' && !progressWritable))
+            return false;
+        try {
+            if (byteLength(JSON.stringify(frozen)) > 240 * 1024)
+                throw new Error('Storage value is too large.');
+            await sdk.storage.set(key, frozen);
+            return true;
+        }
+        catch (e) {
+            $('storageWarning').textContent = 'Not saved to project storage: ' + errorText(e) + '. Current edits remain in this open window.';
+            fail('Save ' + key, e);
+            return false;
+        }
     };
-  }
-
-  function validateBlocklyRuntime() {
-    if (!window.Blockly || !window.FlappyDeviceBlocks || !window.FlappyCrowbotAdapter) {
-      throw new Error('Bundled Blockly runtime, device blocks, or Crowbot adapter is missing.');
+    const result = storageTail.then(task, task);
+    storageTail = result;
+    return result;
+}
+async function getValue(key) {
+    if (!sdk)
+        return null;
+    try {
+        return await sdk.storage.get(key);
     }
-    if (!window.Blockly.serialization || !window.Blockly.serialization.workspaces) {
-      throw new Error('Bundled Blockly does not expose workspace JSON serialization.');
+    catch (e) {
+        $('storageWarning').textContent = 'Storage load failed: ' + errorText(e);
+        throw e;
     }
-  }
-
-  async function initBlockly() {
-    validateBlocklyRuntime();
-    const Blockly = window.Blockly;
-
-    ui.blocklyVersion.textContent = 'Blockly ' + (Blockly.VERSION || 'bundled');
-    workspace = Blockly.inject(ui.blocklyDiv, {
-      toolbox: window.FlappyDeviceBlocks.toolbox,
-      renderer: 'zelos',
-      trashcan: true,
-      move: {scrollbars: true, drag: true, wheel: true},
-      zoom: {controls: true, wheel: true, startScale: 0.88, minScale: 0.45, maxScale: 1.4, scaleSpeed: 1.08},
-      grid: {spacing: 24, length: 3, colour: '#29475d', snap: true}
+}
+async function persist() {
+    if (!student || protectedDraft)
+        return;
+    const s = snapshot();
+    drafts.set(stage.id, s);
+    await saveValue(draftKey(stage.id), s);
+    await saveValue('course.v4.progress', progress);
+}
+function changed() {
+    if (loading || disposed || !student)
+        return;
+    assess();
+    if (protectedDraft) {
+        status('Saved data needs recovery. Use Start over or Local backup before saving.');
+        return;
+    }
+    drafts.set(stage.id, snapshot());
+    if (saveTimer)
+        clearTimeout(saveTimer);
+    const id = stage.id, captured = snapshot();
+    saveTimer = setTimeout(() => { saveTimer = null; void saveValue(draftKey(id), captured); }, 700);
+}
+function assess() {
+    if (!student)
+        return;
+    try {
+        const raw = snapshot();
+        assessment = check(raw, stage);
+        try {
+            $('python').textContent = generate(raw);
+        }
+        catch (e) {
+            $('python').textContent = '# ' + errorText(e);
+        }
+    }
+    catch (e) {
+        assessment = { ok: false, key: '', handlers: [], lines: [{ ok: false, text: errorText(e) }] };
+    }
+    if (receipt && (receipt.stage !== stage.id || receipt.key !== assessment.key || !assessment.ok))
+        receipt = null;
+    const checks = $('checklist');
+    checks.replaceChildren();
+    for (const item of assessment.lines) {
+        const p = document.createElement('p');
+        p.className = item.ok ? 'pass' : 'pending';
+        p.textContent = `${item.ok ? '✓' : '○'} ${item.text}`;
+        checks.append(p);
+    }
+    $('codeLabel').textContent = recoveredKey && recoveredKey === assessment.key ? 'Generated from recovered blocks — not downloaded Python' : 'Generated from your device blocks';
+    refresh();
+}
+function uploaded() { return !!receipt && assessment.ok && receipt.stage === stage.id && receipt.key === assessment.key && receipt.connection === connectionKey(link?.state ?? null); }
+function refresh() {
+    if (disposed)
+        return;
+    const connected = link?.state?.currentDevice;
+    const compatible = connected?.profileId === PROFILE;
+    const foreign = !!link?.state?.activity;
+    const op = !!link?.operation || localBusy;
+    const idle = mode === 'idle';
+    $('version').textContent = 'v' + VERSION;
+    $('connection').textContent = connected ? `${connected.name} · ${compatible ? 'Connected' : 'Different profile'}` : (link?.operation === 'connect' ? 'Waiting for host chooser…' : 'Not connected');
+    $('connection').className = compatible ? 'chip good' : 'chip';
+    $('connect').disabled = !link || !!connected || op || !idle || !visible;
+    $('disconnect').disabled = !compatible || op || !idle || foreign || pump?.busy === true;
+    $('upload').disabled = !compatible || !assessment.ok || op || !idle || foreign || !visible || protectedDraft || pump?.busy === true;
+    $('read').disabled = !compatible || op || !idle || foreign || !visible || pump?.busy === true;
+    for (const id of ['save', 'reset', 'copyExample', 'restoreBackup'])
+        ($(id)).disabled = op || !idle || !student;
+    $('check').disabled = !student || op || !idle;
+    $('cancel').disabled = !link?.job && link?.operation !== 'read';
+    const safety = stage.id < 3 || $('safety').checked;
+    const canPlay = uploaded() && !!game && idle && !op && !foreign && !stopFault && !pump?.busy && visible && safety;
+    $('start').disabled = !canPlay;
+    $('up').disabled = mode !== 'running';
+    $('down').disabled = mode !== 'running';
+    $('stop').disabled = !compatible || op || mode === 'finishing' || foreign || !visible;
+    $('safetyRow').classList.toggle('hidden', stage.id !== 3);
+    $('editorShield').classList.toggle('hidden', idle && !localBusy);
+    $('buildStep').classList.toggle('done', assessment.ok);
+    $('uploadStep').classList.toggle('done', uploaded());
+    $('playStep').classList.toggle('done', progress.cleared[stage.id - 1]);
+    $('uploadNotice').textContent = !assessment.ok ? 'Build the example and check your blocks first.' : !connected ? 'Blocks match. Connect your Crowbot, then upload this stage.' : !uploaded() ? 'Upload this stage’s blocks to the device before starting the game.' : stopFault ? 'STOP was not confirmed as sent. Use Send STOP before another round.' : !safety ? 'Stage 3 moves the robot. Confirm the clear, supervised play area.' : 'This program was acknowledged on this connection. Ready to play. Hardware behavior still needs supervision.';
+    $('uploadNotice').className = uploaded() && !stopFault ? 'notice success' : 'notice';
+    $('upload').textContent = link?.operation === 'upload' ? 'Uploading frozen program…' : 'Upload this stage to device';
+    $('score').textContent = `${game?.sim.score ?? 0} / ${stage.goal}`;
+    $('scoreProgress').max = stage.goal;
+    $('scoreProgress').value = game?.sim.score ?? 0;
+    $('best').textContent = `Stage best: ${progress.best[stage.id - 1]} · ${progress.assisted[stage.id - 1] ? 'Example-assisted' : 'Build it yourself'}`;
+    document.querySelectorAll('[data-stage]').forEach(btn => {
+        const id = Number(btn.dataset.stage);
+        btn.disabled = id > unlocked(progress) || op || !idle || !!pump?.busy;
+        btn.classList.toggle('selected', id === stage.id);
+        btn.setAttribute('aria-current', id === stage.id ? 'step' : 'false');
+        const marker = btn.querySelector('small');
+        if (marker)
+            marker.textContent = progress.cleared[id - 1] ? 'Completed ✓' : id > unlocked(progress) ? 'Locked' : 'Available';
     });
-
-    resizeObserver = new ResizeObserver(() => {
-      if (workspace) Blockly.svgResize(workspace);
-    });
-    resizeObserver.observe(ui.blocklyDiv);
-
-    workspace.addChangeListener((event) => {
-      if (!event || event.isUiEvent || disposed) return;
-      updateCodePreview();
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => void saveWorkspace('Autosaved'), 600);
-    });
-
-    await restoreWorkspace();
-    updateCodePreview();
-    Blockly.svgResize(workspace);
-  }
-
-  async function restoreWorkspace() {
-    let restored = false;
-    if (sdk) {
-      try {
-        const saved = await sdk.storage.get(WORKSPACE_KEY);
-        if (saved && typeof saved === 'object') {
-          const temp = new window.Blockly.Workspace();
-          try {
-            window.Blockly.serialization.workspaces.load(saved, temp);
-            window.FlappyCrowbotAdapter.inspectWorkspace(temp);
-            temp.dispose();
-            window.Blockly.serialization.workspaces.load(saved, workspace);
-            restored = true;
-            const serializedSaved = JSON.stringify(saved);
-            const looksLikeV30DirectionalStarter =
-              serializedSaved.includes('"MESSAGE":"moveup"') &&
-              serializedSaved.includes('"MESSAGE":"left"') &&
-              serializedSaved.includes('"MESSAGE":"right"') &&
-              serializedSaved.includes('"MESSAGE":"stop"');
-
-            if (looksLikeV30DirectionalStarter) {
-              setWorkspaceStatus('Older directional device blocks restored. Current defaults are v' + VERSION + '.', 'warn');
-              showDefaultsBanner(
-                'Older default Blockly detected',
-                'Your saved v3.0 directional program was preserved. Current default template: v' + VERSION + '.'
-              );
-              log('Older directional Blockly was preserved. Use Restore v' + VERSION + ' Defaults to switch to start/pipe/milestone/stop.', 'muted');
-            } else {
-              setWorkspaceStatus('Saved device blocks restored.', 'ok');
+    $('courseSummary').textContent = progress.cleared.every(Boolean) ? 'All three stages complete! Revisit a stage to practice.' : `${progress.cleared.filter(Boolean).length} / 3 stages complete`;
+}
+function ask(message) {
+    if (confirmResolve)
+        return Promise.resolve(false);
+    $('confirmText').textContent = message;
+    $('confirmBox').classList.remove('hidden');
+    previousFocus = document.activeElement;
+    $('confirmNo').focus();
+    return new Promise(resolve => { confirmResolve = resolve; });
+}
+function answer(value) { const resolve = confirmResolve; confirmResolve = null; $('confirmBox').classList.add('hidden'); resolve?.(value); previousFocus?.focus(); }
+async function backupCurrent(reason) {
+    backup = { stage: stage.id, workspace: snapshot(), reason };
+    const saved = await saveValue('course.v4.backup', backup);
+    if (!saved)
+        status('Backup kept in this window only; project storage is unavailable.');
+}
+function validateInBlockly(raw) {
+    const candidate = clone(raw);
+    generate(candidate);
+    const temporary = new B.Workspace();
+    try {
+        B.serialization.workspaces.load(candidate, temporary);
+        return candidate;
+    }
+    finally {
+        temporary.dispose();
+    }
+}
+function loadEditor(raw) {
+    loading = true;
+    try {
+        B.serialization.workspaces.load(clone(raw), student);
+        B.svgResize(student);
+    }
+    finally {
+        loading = false;
+    }
+    receipt = null;
+    assess();
+}
+async function selectStage(id) {
+    if (!touchAllowed() || id > unlocked(progress) || id < 1 || id > 3 || pump?.busy)
+        return;
+    localBusy = true;
+    refresh();
+    try {
+        if (saveTimer) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+        }
+        if (editorReady)
+            await persist();
+        stage = STAGES[id - 1];
+        progress.selected = id;
+        receipt = null;
+        winTicket = null;
+        recoveredKey = '';
+        protectedDraft = false;
+        $('result').classList.add('hidden');
+        $('readResult').classList.add('hidden');
+        $('help').removeAttribute('open');
+        $('hint').textContent = stage.hint;
+        $('title').textContent = `${id}. ${stage.name}`;
+        $('skill').textContent = stage.skill;
+        $('effect').textContent = stage.effect;
+        $('goal').textContent = `Pass ${stage.goal} pipes · ${stage.gap}px gaps · speed ${stage.speed}`;
+        $('sampleLabel').textContent = `Stage ${id} example — read only`;
+        $('safety').checked = false;
+        loading = true;
+        student.updateToolbox(toolbox(stage));
+        B.serialization.workspaces.load(example(stage), sample);
+        B.svgResize(sample);
+        if (sample.setScale)
+            sample.setScale(0.66);
+        let saved = drafts.get(id);
+        if (!saved) {
+            try {
+                saved = await getValue(draftKey(id));
             }
-          } catch (error) {
-            temp.dispose();
-            fail('Saved device workspace validation', error);
-          }
+            catch (e) {
+                protectedDraft = true;
+                fail('Load stage draft', e);
+            }
         }
-      } catch (error) {
-        fail('Device workspace storage read', error);
-      }
+        if (saved) {
+            try {
+                loadEditor(validateInBlockly(saved));
+            }
+            catch (e) {
+                protectedDraft = true;
+                loadEditor(blank());
+                fail('Saved draft preserved for recovery', e);
+            }
+        }
+        else
+            loadEditor(blank());
+        editorReady = true;
+        if (game) {
+            game.sim.stage = stage;
+            game.sim.score = 0;
+            game.sim.y = 245;
+            game.sim.pipes = [];
+            game.draw();
+        }
+        await saveValue('course.v4.progress', progress);
+        status(protectedDraft ? 'Existing saved draft was not overwritten. Use recovery or Start over.' : `Stage ${id}: study the example, build your own, upload, then play.`);
     }
-
-    if (!restored) {
-      window.Blockly.serialization.workspaces.load(starterWorkspace(), workspace);
-      setWorkspaceStatus('Current v' + VERSION + ' defaults loaded.', 'ok');
+    finally {
+        loading = false;
+        localBusy = false;
+        assess();
     }
-  }
-
-  function frozenSnapshot() {
-    if (!workspace) throw new Error('Device Blockly is not ready.');
-    const snapshot = window.Blockly.serialization.workspaces.save(workspace);
-    const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).length;
-    if (bytes > MAX_WORKSPACE_BYTES) throw new Error('Blockly workspace exceeds 256 KiB.');
-    return snapshot;
-  }
-
-  function generateFromSnapshot(snapshot) {
-    return window.FlappyCrowbotAdapter.generateFromSnapshot(snapshot, window.Blockly);
-  }
-
-  function updateCodePreview(label = 'Preview') {
-    if (!workspace) return;
+}
+async function replaceEditor(kind) {
+    if (!touchAllowed() || pump?.busy)
+        return;
+    let target;
+    if (kind === 'backup') {
+        if (!backup) {
+            const b = await getValue('course.v4.backup');
+            if (b && typeof b === 'object')
+                backup = b;
+        }
+        if (!backup || backup.stage !== stage.id)
+            throw new Error('No local backup for the current stage. This is not device readback.');
+        target = validateInBlockly(backup.workspace);
+    }
+    else
+        target = kind === 'copy' ? example(stage) : blank();
+    const text = kind === 'copy' ? 'Copy the completed example into your editor? Try the hint first. This stage will be marked Example-assisted. Your current blocks are backed up. You must upload again.' : kind === 'reset' ? 'Start this stage again with only an empty program block? Current blocks are backed up; course progress is kept.' : 'Restore this local backup? This is not a fresh read from the device. Upload the restored program before playing.';
+    if (!await ask(text) || !touchAllowed())
+        return;
+    localBusy = true;
+    refresh();
     try {
-      const snapshot = frozenSnapshot();
-      const source = generateFromSnapshot(snapshot);
-      ui.codePreview.textContent = source;
-      ui.codeStatus.textContent = label;
-      ui.codeStatus.className = 'pill ok';
-    } catch (error) {
-      ui.codePreview.textContent = '# ' + (error.message || String(error));
-      ui.codeStatus.textContent = 'Invalid blocks';
-      ui.codeStatus.className = 'pill err';
+        await backupCurrent('before-' + kind);
+        protectedDraft = false;
+        if (kind === 'copy')
+            progress.assisted[stage.id - 1] = true;
+        recoveredKey = '';
+        loadEditor(target);
+        await persist();
+        $('readResult').classList.add('hidden');
+        status(kind === 'copy' ? 'Example copied. Read it, check it, and upload this stage before playing.' : 'Editor restored. Upload again after completing the lesson blocks.');
     }
-  }
-
-  async function saveWorkspace(label = 'Saved') {
-    if (!sdk || !workspace) return false;
+    finally {
+        localBusy = false;
+        refresh();
+    }
+}
+async function upload() {
+    if (!touchAllowed() || !link || pump?.busy)
+        return;
+    assess();
+    if (!assessment.ok) {
+        status('Your blocks do not match the lesson yet. Read the checklist.');
+        return;
+    }
+    const frozen = snapshot(), source = generate(frozen), key = assessment.key, id = stage.id;
+    const expected = connectionKey(link.state);
+    receipt = null;
     try {
-      const snapshot = frozenSnapshot();
-      const metadata = {
-        workspaceSchemaVersion: 3,
-        blockSetId: window.FlappyDeviceBlocks.blockSetId,
-        blockSetVersion: window.FlappyDeviceBlocks.blockSetVersion,
-        generatorVersion: window.FlappyDeviceBlocks.generatorVersion,
-        adapterId: window.FlappyCrowbotAdapter.id,
-        adapterVersion: window.FlappyCrowbotAdapter.version,
-        expectedFirmwareVersion: window.FlappyCrowbotAdapter.expectedFirmware,
-        timestamp: new Date().toISOString(),
-        provenance: 'local-editor',
-        defaultTemplateVersion: VERSION
-      };
-      await sdk.storage.set(WORKSPACE_KEY, snapshot);
-      await sdk.storage.set(META_KEY, metadata);
-      setWorkspaceStatus(label + '.', 'ok');
-      return true;
-    } catch (error) {
-      fail('Save device workspace', error);
-      setWorkspaceStatus('Save failed.', 'err');
-      return false;
-    }
-  }
-
-  function showDefaultsBanner(title, message) {
-    ui.defaultsBannerTitle.textContent = title;
-    ui.defaultsBannerText.textContent = message;
-    ui.defaultsBanner.classList.remove('hidden');
-  }
-
-  function hideDefaultsBanner() {
-    ui.defaultsBanner.classList.add('hidden');
-  }
-
-  async function restoreCurrentDefaults() {
-    if (!workspace) {
-      setWorkspaceStatus('Blockly is not ready yet.', 'err');
-      log('Restore defaults ignored because Blockly is not ready.', 'err');
-      return;
-    }
-
-    const buttons = [ui.restoreDefaultsBtn, ui.defaultsBannerBtn].filter(Boolean);
-    const originalLabels = buttons.map((button) => button.textContent);
-
-    for (const button of buttons) {
-      button.disabled = true;
-      button.textContent = 'Restoring…';
-    }
-    setWorkspaceStatus('Backing up current blocks and restoring v' + VERSION + ' defaults…', 'warn');
-    log('Restoring current v' + VERSION + ' default Crowbot program…', 'muted');
-
-    try {
-      await backupCurrentWorkspace('before-restore-v' + VERSION + '-defaults');
-
-      // Blockly workspace load clears the current registered state before
-      // loading the supplied snapshot, so this replaces the editor contents.
-      window.Blockly.serialization.workspaces.load(starterWorkspace(), workspace);
-      window.Blockly.svgResize(workspace);
-      updateCodePreview('v' + VERSION + ' default program');
-
-      const saved = await saveWorkspace('v' + VERSION + ' defaults saved');
-      if (!saved) {
-        throw new Error('Defaults were loaded in the editor but could not be saved to project storage.');
-      }
-
-      hideDefaultsBanner();
-      setWorkspaceStatus('Restored v' + VERSION + ' defaults.', 'ok');
-      log('Restored current v' + VERSION + ' default Crowbot program.', 'ok');
-
-      for (const button of buttons) {
-        button.textContent = 'Restored';
-      }
-      setTimeout(() => {
-        buttons.forEach((button, index) => {
-          if (!disposed) {
-            button.disabled = false;
-            button.textContent = 'Restore v' + VERSION + ' Defaults';
-          }
+        const confirmation = await link.upload(frozen, source, expected, (label, percent) => {
+            status(`Upload: ${label}`);
+            $('transferProgress').value = percent;
         });
-      }, 1200);
-    } catch (error) {
-      const message = fail('Restore current defaults', error);
-      setWorkspaceStatus('Restore failed: ' + message, 'err');
-      buttons.forEach((button) => {
-        button.disabled = false;
-        button.textContent = 'Retry Restore v' + VERSION;
-      });
+        if (disposed)
+            return;
+        if (confirmation !== 'device-confirmed')
+            throw new Error('Upload ended without a device-confirmed acknowledgement. Start remains locked.');
+        await link.current(expected);
+        assess();
+        if (visible && stage.id === id && assessment.ok && assessment.key === key)
+            receipt = { stage: id, key, connection: expected };
+        const hash = async (text) => {
+            if (!crypto.subtle)
+                return null;
+            const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+            return Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
+        };
+        await saveValue(`course.v4.upload.${id}`, { workspaceSchemaVersion: 4, blockSetId: BLOCK_SET, blockSetVersion: VERSION,
+            generatorVersion: VERSION, adapterId: 'crowbot-esp32-mqtt', adapterVersion: VERSION,
+            expectedFirmwareVersion: 'Inspected Crowbot ESP32 compatibility contract; installed revision unverified',
+            sourceHash: await hash(source), workspaceHash: await hash(JSON.stringify(frozen)), timestamp: new Date().toISOString(), provenance: 'device-upload', confirmation });
+        status(receipt ? 'Upload acknowledged. The matching program is ready for this stage on this connection.' : 'Upload acknowledged, but your program, stage or visibility changed. Upload the current blocks again.');
+        $('transferProgress').value = 100;
     }
-  }
-
-  async function backupCurrentWorkspace(reason) {
-    if (!sdk || !workspace) return;
+    catch (e) {
+        receipt = null;
+        fail('Upload failed; device may have a partial workspace/program. Retry only by clicking Upload.', e);
+    }
+    finally {
+        refresh();
+    }
+}
+async function readDevice() {
+    if (!touchAllowed() || !link || pump?.busy)
+        return;
+    receipt = null;
+    pendingRead = null;
+    $('readResult').classList.add('hidden');
     try {
-      const snapshot = window.Blockly.serialization.workspaces.save(workspace);
-      await sdk.storage.set(BACKUP_KEY, {
-        reason,
-        timestamp: new Date().toISOString(),
-        workspace: snapshot
-      });
-    } catch (error) {
-      fail('Local workspace backup', error);
+        pendingRead = await link.read();
+        if (disposed)
+            return;
+        await saveValue('course.v4.readback.raw', { raw: pendingRead.raw, provenance: 'device-readback', timestamp: new Date().toISOString() });
+        validateInBlockly(pendingRead.workspace);
+        $('readResult').classList.remove('hidden');
+        $('readText').textContent = `Received ${pendingRead.bytes} bytes from device. Replace the editor with these recovered blocks? Current edits will be backed up; the result must pass this stage’s checklist.`;
+        status('Device workspace received. It has not replaced your current edits.');
     }
-  }
-
-  function updateDeviceUi(state) {
-    latestState = state;
-    const device = state && state.currentDevice;
-    const busy = !!(state && state.activity);
-    const profileOk = device && device.profileId === window.FlappyCrowbotAdapter.profileId;
-
-    if (device) {
-      ui.deviceStatus.textContent = device.name + (busy ? ' · Busy' : ' · Connected');
-      ui.deviceStatus.className = 'status ' + (busy ? 'busy' : 'connected');
-      ui.connectBtn.disabled = true;
-      ui.disconnectBtn.disabled = false;
-      ui.uploadBtn.disabled = !profileOk || busy || !!readbackActive;
-      ui.readBtn.disabled = !profileOk || busy || !!readbackActive;
-    } else {
-      ui.deviceStatus.textContent = 'Disconnected';
-      ui.deviceStatus.className = 'status disconnected';
-      ui.connectBtn.disabled = !sdk;
-      ui.disconnectBtn.disabled = true;
-      ui.uploadBtn.disabled = true;
-      ui.readBtn.disabled = true;
+    catch (e) {
+        fail('Device readback failed; current edits kept. Local backup remains available.', e);
     }
-  }
-
-  async function connectDevice() {
-    if (!sdk || !visible) return;
+    finally {
+        refresh();
+    }
+}
+async function applyRead() {
+    if (!pendingRead || !touchAllowed())
+        return;
+    const recovered = validateInBlockly(pendingRead.workspace);
+    if (!await ask('Replace your current stage editor with the workspace read from the device? Current edits are backed up.'))
+        return;
+    localBusy = true;
+    refresh();
     try {
-      ui.connectBtn.disabled = true;
-      setTransfer('Opening device chooser…', 0);
-      const state = await sdk.device.connect({profileId: window.FlappyCrowbotAdapter.profileId});
-      updateDeviceUi(state);
-      setTransfer(state.currentDevice ? 'Connected.' : 'No device selected.', 0);
-      if (state.currentDevice) log('Connected to ' + state.currentDevice.name + '.', 'ok');
-    } catch (error) {
-      fail('Connect Bluetooth', error);
-      setTransfer(error && error.message ? error.message : 'Connect failed.', 0);
-      try { updateDeviceUi(await sdk.device.getState()); } catch (_) {}
+        await backupCurrent('before-device-readback');
+        protectedDraft = false;
+        loadEditor(recovered);
+        recoveredKey = assessment.key;
+        await persist();
+        $('codeLabel').textContent = 'Generated from recovered blocks — not downloaded Python';
+        $('readResult').classList.add('hidden');
+        status('Recovered blocks are editable. Check and upload them for this stage before playing.');
     }
-  }
-
-  async function disconnectDevice() {
-    if (!sdk || !visible) return;
-    try {
-      abortReadback(new Error('Readback canceled because the device is disconnecting.'));
-      const state = await sdk.device.getState();
-      if (!state.currentDevice) return;
-      await sdk.device.disconnect({
-        deviceId: state.currentDevice.deviceId,
-        connectionId: state.currentDevice.connectionId
-      });
-      log('Bluetooth disconnected.', 'ok');
-      setTransfer('Disconnected.', 0);
-    } catch (error) {
-      fail('Disconnect Bluetooth', error);
+    finally {
+        localBusy = false;
+        refresh();
     }
-  }
-
-  async function uploadToDevice() {
-    if (!sdk || !workspace || !visible || uploadJobId || readbackActive) return;
-
-    let offJob = null;
+}
+function onState() {
+    if (!link)
+        return;
+    const key = connectionKey(link.state), a = link.state?.activity;
+    const foreignUpload = a?.kind === 'upload' && !(a.owner.type === 'module' && a.owner.id === context?.module.id);
+    if (key !== lastConnection || foreignUpload) {
+        receipt = null;
+        lastConnection = key;
+        if (mode !== 'idle')
+            interrupt('Connection or device program changed. Round canceled; upload again.');
+    }
+    if (mode === 'running' && a && !(a.owner.type === 'module' && a.owner.id === context?.module.id && a.kind === 'send'))
+        interrupt('Another client is using the device. Round canceled. Use Send STOP when the device is free.');
+    refresh();
+}
+function newPump(expected) {
+    return new EventPump(async (text) => { if (!link)
+        throw new Error('iCreator unavailable.'); await link.send(text, expected); }, e => fail('Game message not sent (not retried)', e));
+}
+async function start() {
+    if (!touchAllowed() || !uploaded() || !game || !link || stopFault || pump?.busy)
+        return;
+    if (stage.id === 3 && !$('safety').checked) {
+        status('Confirm a clear, supervised robot area first.');
+        return;
+    }
+    const authorization = receipt;
+    mode = 'starting';
+    $('result').classList.add('hidden');
+    refresh();
     try {
-      const state = await sdk.device.getState();
-      const target = state.currentDevice;
-      if (!target) throw new Error('Connect a compatible Crowbot first.');
-      if (target.profileId !== window.FlappyCrowbotAdapter.profileId) {
-        throw new Error('This editor requires the Crowbot compatibility profile.');
-      }
-      if (state.activity) throw new Error('The shared device is busy.');
-
-      const snapshot = frozenSnapshot();
-      const source = generateFromSnapshot(snapshot);
-      await saveWorkspace('Saved before upload');
-
-      setTransfer('Preparing upload…', 2);
-      ui.uploadBtn.disabled = true;
-      ui.readBtn.disabled = true;
-
-      const clientRequestId = crypto.randomUUID();
-      const created = await sdk.device.upload({
-        deviceId: target.deviceId,
-        connectionId: target.connectionId,
-        profileId: target.profileId,
-        clientRequestId,
-        artifact: {
-          kind: 'micropython',
-          source,
-          workspacePolicy: 'replace',
-          workspace: snapshot
+        await link.current(authorization.connection);
+        if (!uploaded() || receipt !== authorization)
+            throw new Error('Program changed; upload again.');
+        roundConnection = authorization.connection;
+        pump = newPump(roundConnection);
+        if (!await pump.begin())
+            throw new Error('Start message was not sent.');
+        if (!visible || mode !== 'starting' || !uploaded())
+            throw new Error('Start interrupted; no round was launched.');
+        game.sim.start(stage);
+        mode = 'running';
+        $('gameOverlay').classList.add('hidden');
+        $('game').focus();
+        status('Playing. UP/DOWN only control the bird; no per-tap BLE traffic.');
+    }
+    catch (e) {
+        mode = 'idle';
+        fail('Start stage', e);
+    }
+    refresh();
+}
+function pipePassed(score) {
+    if (mode !== 'running')
+        return;
+    if (stage.milestone && score % stage.milestone === 0)
+        pump?.event('milestone');
+    else if (stage.handlers.some(h => h.message === 'pipe'))
+        pump?.event('pipe');
+    refresh();
+}
+async function finish(win) {
+    if (mode !== 'running')
+        return;
+    mode = 'finishing';
+    game?.sim.stop();
+    winTicket = win && receipt ? { ...receipt } : null;
+    progress.best[stage.id - 1] = Math.max(progress.best[stage.id - 1], game?.sim.score ?? 0);
+    status('Round ended. Dropping pending feedback and sending priority STOP…');
+    refresh();
+    const stopped = await pump?.stop();
+    if (disposed || mode !== 'finishing')
+        return;
+    mode = 'idle';
+    stopFault = !stopped;
+    if (stopped)
+        await completeResult(win);
+    else {
+        $('result').classList.remove('hidden');
+        $('resultTitle').textContent = 'STOP needs attention';
+        $('resultText').textContent = 'No device execution guarantee. Check the robot and use Send STOP. New rounds remain locked.';
+        $('nextStage').classList.add('hidden');
+        status('STOP failed or was canceled. It is not automatically replayed.');
+    }
+    $('gameOverlay').classList.remove('hidden');
+    refresh();
+}
+async function completeResult(win) {
+    const validWin = win && winTicket && winTicket.stage === stage.id && winTicket.key === assessment.key && winTicket.connection === connectionKey(link?.state ?? null);
+    if (validWin)
+        progress.cleared[stage.id - 1] = true;
+    winTicket = null;
+    $('result').classList.remove('hidden');
+    $('resultTitle').textContent = validWin ? (stage.id === 3 ? 'Course complete!' : 'Stage cleared!') : 'Try this stage again';
+    $('resultText').textContent = validWin ? `${stage.goal} pipes passed with the uploaded lesson program. ${progress.assisted[stage.id - 1] ? 'Example-assisted completion.' : 'Your own build completed the lesson.'}` : 'Your blocks are kept. The same unchanged, uploaded program can be used for another try.';
+    $('nextStage').classList.toggle('hidden', !validWin || stage.id === 3);
+    const saved = await saveValue('course.v4.progress', progress);
+    status(validWin ? (saved ? 'Progress saved. Next stage needs its own blocks and a fresh upload.' : 'Stage cleared in this window; progress could not be saved.') : 'Round ended. Priority STOP was sent; hardware execution remains unconfirmed.');
+}
+async function manualStop() {
+    if (!link || link.operation || !visible)
+        return;
+    if (mode === 'running') {
+        await finish(false);
+        return;
+    }
+    if (mode !== 'idle' || pump?.busy)
+        return;
+    mode = 'finishing';
+    refresh();
+    const expected = connectionKey(link.state);
+    pump = newPump(expected);
+    const ok = await pump.retryStop();
+    mode = 'idle';
+    stopFault = !ok;
+    if (ok) {
+        status('STOP sent. Device execution is unconfirmed.');
+        if (winTicket)
+            await completeResult(true);
+    }
+    refresh();
+}
+function interrupt(reason) {
+    game?.sim.stop();
+    pump?.cancel();
+    receipt = null;
+    winTicket = null;
+    if (mode !== 'idle')
+        stopFault = true;
+    mode = 'idle';
+    $('gameOverlay').classList.remove('hidden');
+    status(reason);
+    log(reason, true);
+}
+function onData(e) {
+    if (!$('showHex').checked || !visible || e.projectSessionId !== link?.state?.projectSessionId || e.connectionId !== link?.state?.currentDevice?.connectionId)
+        return;
+    $('hex').textContent = e.data.slice(0, 96).map(n => n.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+}
+function listen(id, fn) {
+    $(id).addEventListener('click', () => { void Promise.resolve().then(fn).catch(e => fail(id, e)); }, { signal: listeners.signal });
+}
+function createGame() {
+    game?.dispose();
+    try {
+        game = new GameView($('game'), pipePassed, win => { void finish(win); });
+        $('retryGraphics').classList.add('hidden');
+    }
+    catch (e) {
+        game = null;
+        $('retryGraphics').classList.remove('hidden');
+        fail('Canvas 2D initialization', e);
+    }
+}
+function bind() {
+    listen('connect', () => link?.connect());
+    listen('disconnect', async () => {
+        if (await ask('Disconnect the shared Bluetooth device? This affects all modules in this project.')) {
+            receipt = null;
+            await link?.disconnect();
         }
-      });
-
-      uploadJobId = created.jobId;
-      ui.cancelUploadBtn.classList.remove('hidden');
-
-      offJob = await sdk.device.watchUpload(uploadJobId, (status) => {
-        const p = Number.isFinite(status.progress) ? status.progress * (status.progress <= 1 ? 100 : 1) : 0;
-        setTransfer('Upload: ' + (status.phase || status.status || 'working'), p);
-      });
-
-      const result = await sdk.device.waitForUpload(uploadJobId);
-      setTransfer('Upload acknowledged by device.', 100);
-      log('Device upload acknowledged. This confirms transfer/reload acknowledgement, not every hardware behavior.', 'ok');
-
-      await sdk.storage.set(META_KEY, {
-        workspaceSchemaVersion: 3,
-        blockSetId: window.FlappyDeviceBlocks.blockSetId,
-        blockSetVersion: window.FlappyDeviceBlocks.blockSetVersion,
-        generatorVersion: window.FlappyDeviceBlocks.generatorVersion,
-        adapterId: window.FlappyCrowbotAdapter.id,
-        adapterVersion: window.FlappyCrowbotAdapter.version,
-        expectedFirmwareVersion: window.FlappyCrowbotAdapter.expectedFirmware,
-        timestamp: new Date().toISOString(),
-        provenance: 'uploaded-to-device',
-        confirmation: result && result.confirmation ? result.confirmation : 'device-confirmed'
-      });
-    } catch (error) {
-      fail('Upload to device', error);
-      setTransfer('Upload failed: ' + (error.message || String(error)), 0);
-    } finally {
-      if (offJob) {
-        try { offJob(); } catch (_) {}
-      }
-      uploadJobId = null;
-      ui.cancelUploadBtn.classList.add('hidden');
-      try { updateDeviceUi(await sdk.device.getState()); } catch (_) {}
-    }
-  }
-
-  async function cancelUpload() {
-    if (!sdk || !uploadJobId) return;
-    try {
-      await sdk.device.cancelUpload(uploadJobId);
-      setTransfer('Upload canceled. Device state may be partial; retry the whole upload when ready.', 0);
-      log('Upload canceled. Cancellation is not rollback.', 'err');
-    } catch (error) {
-      fail('Cancel upload', error);
-    }
-  }
-
-  function createReadbackSession(target, projectSessionId) {
-    const decoder = new TextDecoder('utf-8', {fatal: true});
-    let buffer = '';
-    let byteCount = 0;
-    let gotFirstByte = false;
-    let firstTimer = null;
-    let idleTimer = null;
-    let totalTimer = null;
-    let offData = null;
-    let settled = false;
-
-    let resolveResult;
-    let rejectResult;
-    const promise = new Promise((resolve, reject) => {
-      resolveResult = resolve;
-      rejectResult = reject;
     });
-
-    function cleanup() {
-      if (firstTimer) clearTimeout(firstTimer);
-      if (idleTimer) clearTimeout(idleTimer);
-      if (totalTimer) clearTimeout(totalTimer);
-      if (offData) {
-        try { offData(); } catch (_) {}
-      }
-    }
-
-    function reject(error) {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      rejectResult(error);
-    }
-
-    function resolve(value) {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolveResult(value);
-    }
-
-    function armIdle() {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => reject(new Error('Device workspace read timed out while waiting for more data.')), IDLE_TIMEOUT);
-    }
-
-    function feed(event) {
-      if (settled) return;
-      if (event.deviceId !== target.deviceId || event.connectionId !== target.connectionId) return;
-      if (event.projectSessionId && event.projectSessionId !== projectSessionId) return;
-
-      const data = Array.isArray(event.data) ? event.data : [];
-      if (!data.length) return;
-
-      if (!gotFirstByte) {
-        gotFirstByte = true;
-        if (firstTimer) clearTimeout(firstTimer);
-      }
-      armIdle();
-
-      byteCount += data.length;
-      if (byteCount > MAX_READ_BYTES) {
-        reject(new Error('Device workspace exceeded the 256 KiB readback limit.'));
-        return;
-      }
-
-      let textChunk;
-      try {
-        textChunk = decoder.decode(new Uint8Array(data), {stream: true});
-      } catch (error) {
-        reject(new Error('Device returned invalid UTF-8 workspace data: ' + error.message));
-        return;
-      }
-
-      const trimmedChunk = textChunk.trim();
-      if (!buffer && (trimmedChunk === 'upload:ok' || trimmedChunk === 'upload:error')) return;
-
-      buffer += textChunk;
-
-      const complete = findCompleteJson(buffer);
-      if (complete.error) {
-        reject(new Error(complete.error));
-        return;
-      }
-      if (!complete.complete) return;
-
-      const trailing = buffer.slice(complete.end).trim();
-      if (trailing) {
-        reject(new Error('Unexpected mixed telemetry followed the workspace JSON.'));
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(buffer.slice(0, complete.end));
-        if (!parsed || typeof parsed !== 'object' || !parsed.blocks) {
-          throw new Error('Returned JSON is not a Blockly workspace.');
+    listen('upload', upload);
+    listen('read', readDevice);
+    listen('replaceRead', applyRead);
+    listen('keepEdits', () => $('readResult').classList.add('hidden'));
+    listen('cancel', async () => {
+        if (link?.job) {
+            if (await ask('Cancel this upload? The shared device will disconnect and may contain a partial program. Cancellation is not rollback.')) {
+                receipt = null;
+                await link.cancelUpload();
+            }
         }
-        resolve({workspace: parsed, raw: buffer.slice(0, complete.end), bytes: byteCount});
-      } catch (error) {
-        reject(new Error('Device returned invalid Blockly workspace JSON: ' + error.message));
-      }
-    }
-
-    firstTimer = setTimeout(() => reject(new Error('No workspace data arrived from the device within 5 seconds.')), FIRST_BYTE_TIMEOUT);
-    totalTimer = setTimeout(() => reject(new Error('Device workspace read exceeded the 60 second total timeout.')), TOTAL_TIMEOUT);
-
-    return {
-      target,
-      promise,
-      feed,
-      reject,
-      setOffData(fn) { offData = fn; },
-      isSettled() { return settled; }
-    };
-  }
-
-  function findCompleteJson(text) {
-    let start = 0;
-    while (start < text.length && /\s/.test(text[start])) start += 1;
-    if (start >= text.length) return {complete: false};
-
-    const first = text[start];
-    if (first !== '{') {
-      return {complete: false, error: 'Unexpected device data before workspace JSON; mixed telemetry cannot be safely stripped.'};
-    }
-
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-
-    for (let i = start; i < text.length; i += 1) {
-      const ch = text[i];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === '\\') escaped = true;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-
-      if (ch === '"') {
-        inString = true;
-        continue;
-      }
-      if (ch === '{' || ch === '[') depth += 1;
-      else if (ch === '}' || ch === ']') {
-        depth -= 1;
-        if (depth < 0) return {complete: false, error: 'Malformed workspace JSON structure.'};
-        if (depth === 0) return {complete: true, end: i + 1};
-      }
-    }
-
-    return {complete: false};
-  }
-
-  async function readBlocksFromDevice() {
-    if (!sdk || !workspace || !visible || readbackActive || uploadJobId) return;
-
-    let session = null;
-    try {
-      const state = await sdk.device.getState();
-      const target = state.currentDevice;
-      if (!target) throw new Error('Connect a compatible Crowbot first.');
-      if (target.profileId !== window.FlappyCrowbotAdapter.profileId) {
-        throw new Error('Workspace readback is enabled only for the Crowbot compatibility profile.');
-      }
-      if (state.activity) throw new Error('The shared device is busy.');
-
-      setTransfer('Waiting for device workspace…', 4);
-      ui.readBtn.disabled = true;
-      ui.uploadBtn.disabled = true;
-
-      session = createReadbackSession(target, state.projectSessionId);
-      readbackActive = session;
-
-      // Subscribe before the request so an immediate response cannot be lost.
-      const offData = await sdk.device.onData((event) => session.feed(event));
-      session.setOffData(offData);
-
-      await sdk.device.send({
-        deviceId: target.deviceId,
-        connectionId: target.connectionId,
-        text: 'get_device_block_xml'
-      });
-
-      const result = await session.promise;
-      setTransfer('Workspace received. Validating blocks…', 70);
-
-      // Preserve the raw recovered workspace before attempting compatibility validation.
-      try {
-        await sdk.storage.set(READBACK_KEY, {
-          timestamp: new Date().toISOString(),
-          provenance: 'device-readback',
-          workspace: result.workspace
-        });
-      } catch (error) {
-        log('Readback was received but could not be persisted as raw backup: ' + (error.message || String(error)), 'err');
-      }
-
-      const temp = new window.Blockly.Workspace();
-      try {
-        window.Blockly.serialization.workspaces.load(result.workspace, temp);
-        window.FlappyCrowbotAdapter.inspectWorkspace(temp);
-      } finally {
-        temp.dispose();
-      }
-
-      if (!window.confirm('Device blocks were read successfully. Replace the current editor with the device workspace?')) {
-        setTransfer('Device workspace kept as readback backup; editor not replaced.', 100);
-        log('Device workspace read successfully; current edits were kept.', 'ok');
-        return;
-      }
-
-      await backupCurrentWorkspace('before-device-readback-replace');
-      window.Blockly.serialization.workspaces.load(result.workspace, workspace);
-      updateCodePreview('Generated from recovered blocks');
-      await sdk.storage.set(WORKSPACE_KEY, result.workspace);
-      await sdk.storage.set(META_KEY, {
-        workspaceSchemaVersion: 3,
-        blockSetId: window.FlappyDeviceBlocks.blockSetId,
-        blockSetVersion: window.FlappyDeviceBlocks.blockSetVersion,
-        generatorVersion: window.FlappyDeviceBlocks.generatorVersion,
-        adapterId: window.FlappyCrowbotAdapter.id,
-        adapterVersion: window.FlappyCrowbotAdapter.version,
-        expectedFirmwareVersion: window.FlappyCrowbotAdapter.expectedFirmware,
-        timestamp: new Date().toISOString(),
-        provenance: 'device-readback'
-      });
-
-      setWorkspaceStatus('Device workspace restored and editable.', 'ok');
-      setTransfer('Readback complete.', 100);
-      log('Read ' + result.bytes + ' bytes of Blockly workspace from device.', 'ok');
-    } catch (error) {
-      fail('Read blocks from device', error);
-      setTransfer('Read failed: ' + (error.message || String(error)), 0);
-      if (session) session.reject(error);
-    } finally {
-      readbackActive = null;
-      try { updateDeviceUi(await sdk.device.getState()); } catch (_) {}
-    }
-  }
-
-  function abortReadback(error) {
-    if (readbackActive && !readbackActive.isSettled()) {
-      readbackActive.reject(error || new Error('Readback canceled.'));
-    }
-    readbackActive = null;
-  }
-
-  function queueGameCommand(text, options = {}) {
-    const command = String(text);
-    const urgent = options.urgent === true;
-
-    if (urgent) {
-      // STOP is a terminal game state. Drop any queued nonterminal event so
-      // stale gameplay commands cannot run after death.
-      pendingGameEvent = null;
-      urgentStopPending = true;
-      void pumpGameCommandQueue();
-      return;
-    }
-
-    if (urgentStopPending || game.mode === 'over') {
-      log('Dropped stale game event "' + command + '" because STOP is pending.', 'muted');
-      return;
-    }
-
-    // Normal game events are state notifications, not a command history.
-    // While a BLE write is in flight, keep only the newest pending event.
-    pendingGameEvent = command;
-    void pumpGameCommandQueue();
-  }
-
-  async function pumpGameCommandQueue() {
-    if (gameSendInFlight || disposed || !visible || !sdk) return;
-
-    let command = null;
-    let urgent = false;
-
-    if (urgentStopPending) {
-      urgentStopPending = false;
-      command = 'stop';
-      urgent = true;
-      pendingGameEvent = null;
-    } else if (pendingGameEvent) {
-      command = pendingGameEvent;
-      pendingGameEvent = null;
-    }
-
-    if (!command) return;
-
-    gameSendInFlight = true;
-    try {
-      const waitMs = Math.max(0, BLE_MIN_INTERVAL - (performance.now() - bleLastSendAt));
-      if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
-
-      const state = await sdk.device.getState();
-      const target = state.currentDevice;
-      if (!target) {
-        log('Game event "' + command + '" not sent: no device connected.', 'err');
-        return;
-      }
-      if (state.activity) {
-        log('Game event "' + command + '" not sent: shared device is busy; event is not replayed.', 'err');
-        return;
-      }
-
-      bleLastSendAt = performance.now();
-      await sdk.device.send({
-        deviceId: target.deviceId,
-        connectionId: target.connectionId,
-        text: command
-      });
-      log((urgent ? 'URGENT ' : '') + 'Game → BLE: ' + command, 'ok');
-    } catch (error) {
-      fail('Send game event "' + command + '"', error);
-    } finally {
-      gameSendInFlight = false;
-
-      // STOP always wins over anything queued while the previous write was active.
-      if (urgentStopPending || pendingGameEvent) {
-        void pumpGameCommandQueue();
-      }
-    }
-  }
-
-  function startGame() {
-    if (game.mode === 'running') return;
-    game.mode = 'running';
-    game.score = 0;
-    game.spawnTimer = 0;
-    game.bird.x = 180;
-    game.bird.y = canvas.height * 0.48;
-    game.bird.vy = 0;
-    game.pipes = [];
-    game.particles = [];
-    game.lastFrame = performance.now();
-    updateScore();
-    ui.overlay.classList.add('hidden');
-    pendingGameEvent = null;
-    urgentStopPending = false;
-    queueGameCommand('start');
-  }
-
-  function triggerUp() {
-    if (game.mode !== 'running') return;
-    game.bird.vy = -430;
-  }
-
-  function triggerDown() {
-    if (game.mode !== 'running') return;
-    game.bird.vy = Math.max(game.bird.vy + 360, 340);
-  }
-
-  async function gameOver() {
-    if (game.mode !== 'running') return;
-    game.mode = 'over';
-    addBurst(game.bird.x, game.bird.y);
-
-    if (game.score > game.best) {
-      game.best = game.score;
-      updateScore();
-      if (sdk) {
-        try { await sdk.storage.set(BEST_KEY, game.best); }
-        catch (error) { fail('Save best score', error); }
-      }
-    }
-
-    ui.overlayTitle.textContent = 'Game Over';
-    ui.overlayText.textContent = 'Score: ' + game.score + ' · Best: ' + game.best;
-    ui.overlayStartBtn.textContent = 'Play Again';
-    ui.overlay.classList.remove('hidden');
-    queueGameCommand('stop', {urgent: true});
-  }
-
-  function spawnPipe() {
-    const gap = 150;
-    const margin = 78;
-    const minCenter = margin + gap / 2;
-    const maxCenter = canvas.height - 26 - margin - gap / 2;
-    const center = minCenter + Math.random() * (maxCenter - minCenter);
-    game.pipes.push({
-      x: canvas.width + 40,
-      width: 70,
-      top: center - gap / 2,
-      bottom: center + gap / 2,
-      scored: false
+        else
+            link?.cancelRead();
     });
-  }
-
-  function updateGame(dt) {
-    if (game.mode !== 'running') return;
-
-    const b = game.bird;
-    b.vy += 1250 * dt;
-    b.y += b.vy * dt;
-
-    game.spawnTimer += dt;
-    if (game.spawnTimer >= 1.45) {
-      game.spawnTimer -= 1.45;
-      spawnPipe();
-    }
-
-    for (const p of game.pipes) {
-      p.x -= 235 * dt;
-      if (!p.scored && p.x + p.width < b.x) {
-        p.scored = true;
-        game.score += 1;
-        updateScore();
-        queueGameCommand('pipe');
-        if (game.score % 5 === 0) {
-          queueGameCommand('milestone');
+    listen('save', async () => { await persist(); status('Save requested. Any storage errors remain visible below.'); });
+    listen('check', () => { assess(); status(assessment.ok ? 'Blocks match! Upload this stage to the device before playing.' : 'Not finished yet. Compare the highlighted checklist with the example; a hint is available below.'); });
+    listen('copyExample', () => replaceEditor('copy'));
+    listen('reset', () => replaceEditor('reset'));
+    listen('restoreBackup', () => replaceEditor('backup'));
+    listen('fitExample', () => { sample?.zoomToFit(); if (sample?.scale < 0.45)
+        sample.setScale(0.45); });
+    listen('start', start);
+    listen('stop', manualStop);
+    listen('nextStage', () => selectStage(stage.id + 1));
+    listen('up', () => game?.sim.up());
+    listen('down', () => game?.sim.down());
+    listen('retryGraphics', () => { createGame(); refresh(); });
+    listen('confirmYes', () => answer(true));
+    listen('confirmNo', () => answer(false));
+    $('safety').addEventListener('change', refresh, { signal: listeners.signal });
+    document.querySelectorAll('[data-stage]').forEach(btn => btn.addEventListener('click', () => { void selectStage(Number(btn.dataset.stage)).catch(e => fail('Change stage', e)); }, { signal: listeners.signal }));
+    $('game').addEventListener('pointerdown', () => game?.sim.up(), { signal: listeners.signal });
+    window.addEventListener('keydown', e => {
+        if (confirmResolve) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                answer(false);
+            }
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                (document.activeElement === $('confirmNo') ? $('confirmYes') : $('confirmNo')).focus();
+            }
+            return;
         }
-      }
-    }
-    game.pipes = game.pipes.filter((p) => p.x + p.width > -20);
-
-    for (const p of game.particles) {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy += 500 * dt;
-      p.life -= dt;
-    }
-    game.particles = game.particles.filter((p) => p.life > 0);
-
-    if (isCollision()) void gameOver();
-  }
-
-  function circleRectCollision(cx, cy, r, rx, ry, rw, rh) {
-    const nx = Math.max(rx, Math.min(cx, rx + rw));
-    const ny = Math.max(ry, Math.min(cy, ry + rh));
-    const dx = cx - nx;
-    const dy = cy - ny;
-    return dx * dx + dy * dy <= r * r;
-  }
-
-  function isCollision() {
-    const b = game.bird;
-    if (b.y + b.r >= canvas.height - 26 || b.y - b.r <= 0) return true;
-    return game.pipes.some((p) =>
-      circleRectCollision(b.x, b.y, b.r, p.x, 0, p.width, p.top) ||
-      circleRectCollision(b.x, b.y, b.r, p.x, p.bottom, p.width, canvas.height - p.bottom - 26)
-    );
-  }
-
-  function addBurst(x, y) {
-    for (let i = 0; i < 14; i += 1) {
-      game.particles.push({
-        x, y,
-        vx: (Math.random() - 0.5) * 260,
-        vy: (Math.random() - 0.5) * 260,
-        life: 0.8 + Math.random() * 0.4
-      });
-    }
-  }
-
-  function drawBackground() {
-    const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    sky.addColorStop(0, '#74d6ff');
-    sky.addColorStop(1, '#e3f9ff');
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.fillStyle = 'rgba(255,255,255,.58)';
-    for (let i = 0; i < 5; i += 1) {
-      const x = ((i * 220 + performance.now() * 0.01) % 1100) - 100;
-      const y = 80 + (i % 3) * 55;
-      ctx.beginPath();
-      ctx.arc(x, y, 26, 0, Math.PI * 2);
-      ctx.arc(x + 28, y + 5, 20, 0, Math.PI * 2);
-      ctx.arc(x - 26, y + 7, 18, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.fillStyle = '#59b65d';
-    ctx.fillRect(0, canvas.height - 26, canvas.width, 26);
-    ctx.fillStyle = '#368a44';
-    ctx.fillRect(0, canvas.height - 26, canvas.width, 7);
-  }
-
-  function drawPipes() {
-    for (const p of game.pipes) {
-      ctx.fillStyle = '#24a65a';
-      ctx.fillRect(p.x, 0, p.width, p.top);
-      ctx.fillRect(p.x, p.bottom, p.width, canvas.height - p.bottom - 26);
-      ctx.fillStyle = '#42c875';
-      ctx.fillRect(p.x + 8, 0, 10, p.top);
-      ctx.fillRect(p.x + 8, p.bottom, 10, canvas.height - p.bottom - 26);
-      ctx.fillStyle = '#168043';
-      ctx.fillRect(p.x - 7, p.top - 22, p.width + 14, 22);
-      ctx.fillRect(p.x - 7, p.bottom, p.width + 14, 22);
-    }
-  }
-
-  function drawBird() {
-    const b = game.bird;
-    ctx.save();
-    ctx.translate(b.x, b.y);
-    ctx.rotate(Math.max(-0.45, Math.min(0.65, b.vy / 800)));
-    ctx.fillStyle = '#ffd84d';
-    ctx.beginPath();
-    ctx.arc(0, 0, b.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#ff9d31';
-    ctx.beginPath();
-    ctx.moveTo(15, -2);
-    ctx.lineTo(33, 4);
-    ctx.lineTo(15, 10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(8, -7, 7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#17212a';
-    ctx.beginPath();
-    ctx.arc(10, -7, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawParticles() {
-    ctx.fillStyle = '#ffd84d';
-    for (const p of game.particles) {
-      ctx.globalAlpha = Math.max(0, p.life);
-      ctx.fillRect(p.x, p.y, 5, 5);
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  function renderGame() {
-    drawBackground();
-    drawPipes();
-    drawBird();
-    drawParticles();
-    if (game.mode === 'running') {
-      ctx.save();
-      ctx.font = '900 44px system-ui';
-      ctx.textAlign = 'center';
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = 'rgba(0,0,0,.25)';
-      ctx.strokeText(String(game.score), canvas.width / 2, 64);
-      ctx.fillStyle = '#fff';
-      ctx.fillText(String(game.score), canvas.width / 2, 64);
-      ctx.restore();
-    }
-  }
-
-  function frame(now) {
-    if (disposed) return;
-    const dt = Math.min(0.035, (now - (game.lastFrame || now)) / 1000);
-    game.lastFrame = now;
-    if (visible) updateGame(dt);
-    renderGame();
-    requestAnimationFrame(frame);
-  }
-
-  function bindEvents() {
-    ui.connectBtn.addEventListener('click', () => void connectDevice());
-    ui.disconnectBtn.addEventListener('click', () => void disconnectDevice());
-    ui.startBtn.addEventListener('click', startGame);
-    ui.overlayStartBtn.addEventListener('click', startGame);
-    ui.upBtn.addEventListener('click', triggerUp);
-    ui.downBtn.addEventListener('click', triggerDown);
-    ui.saveBtn.addEventListener('click', () => void saveWorkspace('Saved'));
-    ui.restoreDefaultsBtn.addEventListener('click', () => void restoreCurrentDefaults());
-    ui.defaultsBannerBtn.addEventListener('click', () => void restoreCurrentDefaults());
-    ui.uploadBtn.addEventListener('click', () => void uploadToDevice());
-    ui.readBtn.addEventListener('click', () => void readBlocksFromDevice());
-    ui.cancelUploadBtn.addEventListener('click', () => void cancelUpload());
-    ui.clearLogBtn.addEventListener('click', () => { ui.commandLog.innerHTML = ''; });
-
-    window.addEventListener('keydown', (event) => {
-      if (event.repeat) return;
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        triggerUp();
-      } else if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        triggerDown();
-      }
-    });
-  }
-
-  async function initSdk() {
-    if (!window.icreator) {
-      ui.sdkWarning.classList.remove('hidden');
-      ui.connectBtn.disabled = true;
-      setTransfer('Open this module in iCreator.', 0);
-      return;
-    }
-
-    sdk = window.icreator;
-    sdkContext = await sdk.ready();
-
-    try {
-      const best = await sdk.storage.get(BEST_KEY);
-      game.best = Number.isFinite(best) ? best : 0;
-      updateScore();
-    } catch (error) {
-      fail('Load best score', error);
-    }
-
-    offState = await sdk.device.watchState((state) => {
-      latestState = state;
-      updateDeviceUi(state);
-
-      if (readbackActive && state.activity && state.activity.owner) {
-        const moduleInfo = sdkContext && sdkContext.module ? sdkContext.module : {};
-        const owner = state.activity.owner;
-        const isOurModule = owner.type === 'module' && (
-          owner.id === moduleInfo.id ||
-          owner.id === moduleInfo.instanceId
-        );
-        if (!isOurModule && state.activity.kind !== 'send') {
-          abortReadback(new Error('Readback aborted because another client started a device operation.'));
+        const target = e.target instanceof Element ? e.target : null;
+        if (e.repeat || target?.closest('input,textarea,select,[contenteditable="true"],.blocklySvg,.blocklyWidgetDiv') || mode !== 'running')
+            return;
+        if (e.key === 'ArrowUp' || e.code === 'Space') {
+            e.preventDefault();
+            game?.sim.up();
         }
-      }
-
-      if (readbackActive) {
-        const sessionDevice = readbackActive.target;
-        if (!state.currentDevice) {
-          abortReadback(new Error('Readback aborted because the Bluetooth device disconnected.'));
-        } else if (sessionDevice && (
-          state.currentDevice.deviceId !== sessionDevice.deviceId ||
-          state.currentDevice.connectionId !== sessionDevice.connectionId
-        )) {
-          abortReadback(new Error('Readback aborted because the Bluetooth connection changed.'));
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            game?.sim.down();
         }
-      }
-    });
-
-    offVisibility = sdk.lifecycle.onVisibilityChange((isVisible) => {
-      visible = isVisible;
-      if (!visible) {
-        abortReadback(new Error('Readback canceled because the module became hidden.'));
-      }
-    });
-
-    sdk.lifecycle.onDispose(() => dispose());
-    updateDeviceUi(await sdk.device.getState());
-  }
-
-  function dispose() {
-    if (disposed) return;
+    }, { signal: listeners.signal });
+}
+function dispose() {
+    if (disposed)
+        return;
+    answer(false);
     disposed = true;
     visible = false;
-    abortReadback(new Error('Module closed.'));
-    if (saveTimer) clearTimeout(saveTimer);
-    if (offState) offState();
-    if (offVisibility) offVisibility();
-    if (resizeObserver) resizeObserver.disconnect();
-    if (workspace) workspace.dispose();
-    console.info('[Flappy BLE v' + VERSION + '] disposed without disconnecting shared BLE');
-  }
-
-  async function init() {
-    bindEvents();
-    renderGame();
-
-    try {
-      await initSdk();
-      await initBlockly();
-      if (latestState) updateDeviceUi(latestState);
-      console.info('[Flappy BLE v' + VERSION + '] ready');
-    } catch (error) {
-      ui.sdkWarning.classList.remove('hidden');
-      ui.sdkWarning.textContent = 'Module startup failed: ' + fail('Startup', error);
+    if (saveTimer)
+        clearTimeout(saveTimer);
+    listeners.abort();
+    lifecycleOff.splice(0).forEach(off => off());
+    resize?.disconnect();
+    pump?.cancel();
+    game?.dispose();
+    link?.dispose();
+    student?.dispose();
+    sample?.dispose();
+    console.info(`[Flappy BLE ${VERSION}] disposed; shared BLE was not disconnected`);
+}
+async function init() {
+    bind();
+    createGame();
+    if (window.icreator) {
+        try {
+            sdk = window.icreator;
+            context = await sdk.ready();
+            console.info(`[Flappy BLE ${VERSION}] SDK ready`, context.apiVersion, context.platform);
+            const d = sdk.lifecycle.onDispose(dispose);
+            if (d)
+                lifecycleOff.push(d);
+            const v = sdk.lifecycle.onVisibilityChange(shown => {
+                visible = shown;
+                link?.setVisible(shown);
+                game?.setVisible(shown);
+                if (!shown) {
+                    answer(false);
+                    if (mode !== 'idle')
+                        interrupt('Module hidden: round canceled. No hidden BLE send was attempted. Use Send STOP when visible, then upload again.');
+                }
+                refresh();
+            });
+            if (v)
+                lifecycleOff.push(v);
+            if (context.capabilities.device.available) {
+                link = new Link(sdk, context, onState, text => log(text), onData);
+                await link.init();
+            }
+            else
+                $('sdkWarning').textContent = context.capabilities.device.unavailableReason || 'Bluetooth is unavailable in this host.';
+        }
+        catch (e) {
+            $('sdkWarning').textContent = 'iCreator initialization: ' + errorText(e);
+            fail('SDK initialization', e);
+        }
     }
-
-    requestAnimationFrame(frame);
-  }
-
-  void init();
-})();
+    else
+        $('sdkWarning').textContent = 'Open this module in iCreator. Examples and editing are available, but Bluetooth and course play are disabled.';
+    if (disposed)
+        return;
+    try {
+        if (!B?.serialization?.workspaces)
+            throw new Error('The locally bundled Blockly runtime is missing. Re-import the complete release folder.');
+        registerBlocks(B);
+        const options = { renderer: 'zelos', sounds: false, media: './assets/vendor/media/',
+            move: { scrollbars: true, drag: true, wheel: true }, grid: { spacing: 22, length: 2, colour: '#426173', snap: true },
+            zoom: { controls: true, wheel: true, startScale: 0.68, minScale: 0.4, maxScale: 1.3 } };
+        student = B.inject('student', { ...options, toolbox: toolbox(stage), trashcan: true, maxInstances: { flappy_device_program: 1 } });
+        sample = B.inject('sample', { ...options, readOnly: true, trashcan: false });
+        student.addChangeListener((e) => { if (!e.isUiEvent)
+            changed(); });
+        resize = new ResizeObserver(() => { if (!disposed) {
+            B.svgResize(student);
+            B.svgResize(sample);
+        } });
+        resize.observe($('boards'));
+        try {
+            progress = readProgress(await getValue('course.v4.progress'));
+        }
+        catch (e) {
+            progressWritable = false;
+            fail('Progress load; saved data kept', e);
+            $('storageWarning').textContent = 'Existing progress could not be read. Do not overwrite it; reopen after fixing the storage/schema error.';
+        }
+        try {
+            const legacy = await getValue('deviceWorkspace.v3');
+            if (legacy)
+                $('legacy').textContent = 'Your v3 device workspace is kept unchanged in storage. These three lesson drafts are separate.';
+        }
+        catch (e) {
+            log('Legacy workspace check: ' + errorText(e), true);
+        }
+        loading = false;
+        await selectStage(progress.selected);
+        console.info(`[Flappy BLE ${VERSION}] three-stage course ready; no hardware action on load`);
+    }
+    catch (e) {
+        fail('Blockly / course startup', e);
+        $('sdkWarning').textContent += '\n' + errorText(e);
+    }
+    refresh();
+}
+void init().catch(e => fail('Startup', e));

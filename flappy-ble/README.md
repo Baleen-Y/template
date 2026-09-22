@@ -1,217 +1,65 @@
-# Flappy BLE Device Blockly — v3.1.2
+# Flappy BLE — Three-stage Quest 4.0.0
 
-Flappy BLE v3 fixes the direction of the Blockly integration.
+A directly importable iCreator module. Device Blockly programs the physical Crowbot; it is not a browser game-block interpreter.
 
-The browser game and the physical-device program are now separate layers:
+## Student workflow
 
-- **Flappy game** runs in the module and sends runtime BLE event strings.
-- **Device Blockly** generates the Crowbot Python callback that is uploaded to the physical device.
-- **Device readback** retrieves the device's saved Blockly workspace and restores it into the same editor.
+Choose the unlocked stage → study the read-only Blockly example → assemble your own device program → check the checklist → connect Crowbot → upload this exact program and workspace → play the stage. Clearing a stage unlocks the next one.
 
-Dragging a device block does not execute hardware. Hardware behavior changes only after an explicit **Upload to Device**.
+| Stage | Game | Device lesson |
+|---|---|---|
+| 1 · First light | Pass 3 pipes; gap 235; speed 145; gravity 850 | `start` turns the light on. `stop` stops both motors and switches the light off. Events and action order. |
+| 2 · Signal patterns | Pass 5 pipes; gap 195; speed 180; gravity 1000 | `pipe` repeats a 100 ms off/on pattern twice. Learn repeats and timing. No moving-motor action. |
+| 3 · Robot celebration | Pass 7 pipes; gap 160; speed 220; gravity 1150 | Random light per pipe; at scores 3 and 6 perform two short 35-speed, 120 ms motor pulses, each followed by motor stops and 120 ms rest. Learn coordinated actions and safe stops. |
 
-## v3.1 game-state integration
+Pipes spawn 2.6 seconds apart. In stage 3, a milestone replaces that pipe's normal feedback rather than queueing both. The final target ends the round and requests STOP. UP/DOWN and Space affect only the game and do not produce BLE traffic.
 
-v3.1 stops sending BLE commands for every UP/DOWN press. Those controls now affect only the bird.
+## Examples are not pre-filled answers
 
-The browser sends lower-frequency state events instead:
+Every new stage starts with one empty device-program root. A separate, real Blockly read-only workspace shows the completed example. The stage toolbox exposes only the needed vocabulary. The checker validates message names, action order, values and repeat nesting; it ignores positions/IDs and permits message handlers in a different order.
 
-- game start -> `start`
-- each passed pipe -> `pipe`
-- every 5 points -> `milestone`
-- game over -> `stop`
+“Stuck? Open a hint” explains the current lesson. Only inside that help section is “Still stuck? Copy completed example.” Copying requires an in-page confirmation, backs up current work, and records example-assisted progress without blocking completion. “Start over (blank)” and “Restore local backup” are separate recovery actions. No native `window.confirm` is used.
 
-The starter device Blockly program maps them to the original Crowbot command-library examples:
+## Upload is a real prerequisite
 
-- `start` -> light on
-- `pipe` -> random light feedback
-- `milestone` -> both motors forward briefly, wait 300 ms, stop both motors, then random light
-- `stop` -> stop both motors + light off
+The Start button is gated by a valid current-stage solution and a `device-confirmed` upload result on the current project/device/connection. Changing semantic blocks, selecting another stage, reconnecting, reopening, or observing another client's upload invalidates authorization. Saved upload metadata is diagnostic only; it is never trusted to enable a future session. Moving a block without changing its program does not require a needless upload.
 
-This makes the physical device mirror game state/progress instead of mirroring individual finger presses.
+Upload freezes one actual `Blockly.serialization.workspaces.save` snapshot and generates Python from that same snapshot. It calls the implemented `sdk.device.upload` with `kind: micropython`, `workspacePolicy: replace`, source and the matching raw workspace. Editing during the accepted upload cannot mutate its payload and will require a new upload. Progress uses `watchUpload`/`waitForUpload`; no simulated hardware-success timer is used in the release.
 
-## Device Blockly blocks
+A confirmation means the host reported transfer/reload acknowledgement. It is not proof that the robot executed every action, nor is it proof that the installed firmware matches the inspected sources.
 
-The v3 starter toolbox contains:
+## Device and firmware prerequisites
 
-- Crowbot device program
-- when game message ...
-- device light on/off/random
-- left/right motor forward/backward with speed
-- stop left/right motor
-- wait milliseconds
+This adapter targets the inspected Crowbot ESP32 compatibility contract through `integem-crowbot-mqtt-v1`; it is not a universal Bluetooth or Drone program uploader. Function examples are those supplied in `MODULE_SYSTEM_PROMPT(3).md`: `light_turnon`, `light_turnoff`, `light_random`, `moveup_left/right`, `movedown_left/right`, `stopmove_left/right`, and `time.sleep_ms`.
 
-The block vocabulary is module-owned teaching content. The actual Crowbot function-name mapping is isolated in:
+The Python entry is `def MQTT(mqtt_msg, voltage):` with two-space indentation. The existing firmware adds its command-library import and terminal return. The generator emits final Python; no legacy colon-converter is used. The vocabulary map is isolated in `source/flappy-ble/src/model.ts` and can be replaced for a teacher-maintained compatible command library without changing the transport. New names are not claimed to exist in shipping firmware.
 
-`assets/crowbot-adapter.js`
+The module never implements b/m framing itself and never directly accesses browser Bluetooth, MQTT, Web Serial, WebUSB, workers, popups or external services. The host owns connections, transfer pacing and acknowledgements.
 
-If a teacher-maintained firmware library renames a function, change the adapter/generator mapping rather than the BLE transfer framing.
+## STOP behavior and physical limitations
 
-## Generated Crowbot source
+Only one ordinary event is pending. A terminal STOP drops it, including an event selected but still waiting for the send interval. At most one already-accepted write must finish first. No failed/BUSY operation is automatically retried. The UI exposes Send STOP and blocks another round after a failed stop attempt.
 
-The module generates a final callback shaped like:
+Device-side blocking waits cannot be interrupted by the browser. Stage 3 actions are brief and self-stopping, but this is not a certified safety mechanism. Supervise the robot in a clear area away from edges. Bluetooth loss, firmware/library faults, device power loss and physical effects cannot be diagnosed from a GATT write receipt.
 
-```python
-def MQTT(mqtt_msg, voltage):
-  if mqtt_msg == "moveup":
-    moveup_left(50)
-    moveup_right(50)
-```
+Hiding a module cancels the round and timed sends; it does not try to send while hidden. On return, attend to the robot, use Send STOP and upload again. Closing/disposal never disconnects other modules' shared connection. Explicit upload cancellation can disconnect the shared device and leave partial workspace/program state; the UI explains this before cancellation.
 
-If delay blocks are used, the generator adds `import time` and emits `time.sleep_ms(...)`.
+## Read blocks from device
 
-The module sends the final Python directly. It does not use the historical colon-string converter.
+The live SDK notification listener is registered before the exact `get_device_block_xml` request. The bounded stream parser filters device/connection/project, supports split UTF-8 characters and JSON, and rejects mixed or unrelated traffic. Limits: 256 KiB; 5 s first-byte; 5 s idle; 60 s total. Disconnect, project changes, hiding, disposal and conflicting shared activity cancel the read. These are module-side guards, not an exclusive multi-client transaction guarantee.
 
-## Upload loop
+Raw received text is kept in memory and persisted when within storage limits. It is validated against this block set and a temporary Blockly workspace before explicit replacement of current edits. Local backup remains separate and clearly labeled. After restoring, the code pane says “Generated from recovered blocks,” not “Device source.” Actual mqtt.py/main.py readback and arbitrary Python-to-Blockly conversion are not claimed.
 
-Upload is an explicit user action.
+## Upgrade and persistence
 
-1. Save a frozen Blockly workspace snapshot.
-2. Generate Python from that exact frozen snapshot.
-3. Verify a compatible `integem-crowbot-mqtt-v1` connection.
-4. Call `sdk.device.upload` with:
-   - `kind: 'micropython'`
-   - generated source
-   - `workspacePolicy: 'replace'`
-   - the matching raw workspace snapshot
-5. Observe `watchUpload` and await `waitForUpload`.
+Same manifest ID `flappy-ble`, version `4.0.0`. Update the existing module from the built `flappy-ble/` folder or ZIP and grant the listed permissions when the host prompts. Do not import the `source/` project as a module.
 
-The host keeps the existing Crowbot b/m transport, pacing and ACK handling. The module does not manually send reserved `b:` or `m:` framing.
+Course keys are separate: `course.v4.progress`, `course.v4.stage.1/2/3`, `course.v4.backup`, `course.v4.upload.1/2/3`, and `course.v4.readback.raw`. Existing v3 workspace/metadata/high-score keys are not deleted or reinterpreted as lesson programs. Stage drafts have a 64 KiB module limit; metadata is stored separately. Storage failures are visible and current-window edits remain available. Unknown progress schemas are not overwritten.
 
-An upload ACK is reported as transfer/reload acknowledgement, not proof that every physical action behaves correctly.
+## Source, build and tests
 
-## Read from device
+`source/flappy-ble/src/` contains the full TypeScript implementation, not a partial source reference. Runtime uses locally compiled ES modules and the repository's pinned Blockly 8.0.0 core. All media are local and sounds are disabled. No npm installation, development server or internet is needed by the installed release.
 
-Readback uses the current legacy request:
+For development in `source/flappy-ble`: `npm install` (or `npm ci` once the checked-in lock exists), `npm run build`, `npm test`, then `npx playwright install chromium` and `npm run test:browser`. Node 22 is used for TypeScript build/test tooling. The GitHub workflow compiles, runs production-code unit/protocol tests, tests the actual bundled Blockly in headless Chromium with an explicitly mocked iCreator SDK, and only then commits the built release on the feature branch.
 
-`get_device_block_xml`
-
-The module:
-
-- subscribes to `sdk.device.onData` before sending the request
-- filters by deviceId, connectionId and project session
-- uses streaming UTF-8 decoding
-- limits the workspace to 256 KiB
-- uses a 5-second first-byte timeout
-- uses a 5-second idle timeout
-- uses a 60-second absolute timeout
-- rejects unknown mixed telemetry instead of silently stripping it
-- parses one complete top-level JSON workspace
-- stores the raw parsed workspace as a local readback backup when storage permits
-- validates the downloaded blocks in a temporary Blockly workspace
-- backs up current edits before replacement
-- asks before replacing the current editor
-- regenerates Python and labels it **Generated from recovered blocks**
-
-The protocol does not provide actual `mqtt.py` source readback. The code shown after readback is regenerated from the recovered blocks.
-
-## Local storage
-
-v3 uses separate versioned keys:
-
-- `deviceWorkspace.v3`
-- `deviceWorkspace.meta.v3`
-- `deviceWorkspace.backup.v3`
-- `deviceReadback.raw.v3`
-- existing `bestScore`
-
-The v2 browser-game Blockly storage is not reused as the device workspace.
-
-## Bluetooth profile
-
-v3 targets the inspected Crowbot ESP32 compatibility path and uses:
-
-`integem-crowbot-mqtt-v1`
-
-It does not use `navigator.bluetooth`, direct GATT, WebUSB, Web Serial, MQTT, WebSocket, a custom backend, or a custom b/m implementation.
-
-## Bundled runtime
-
-Blockly 8.0.0 is bundled locally in:
-
-- `assets/vendor/blockly_compressed.js`
-- `assets/vendor/blocks_compressed.js`
-- `assets/vendor/en.js`
-
-No CDN or external runtime dependency is required.
-
-## Physical validation status
-
-The module contains the real SDK upload and notification-readback implementation.
-
-Static checks can verify release structure, permissions, local assets, syntax and the presence of the real upload/readback paths. A physical Crowbot was not available in the development environment, so real-device upload/readback comparison and motor/light behavior remain pending hardware validation.
-
-Do not interpret a successful transfer ACK as full hardware behavior certification.
-
-
-## Protocol mock verification
-
-A hardware-free protocol mock was run during v3 development for the required loop:
-
-1. edit a device action from right-motor speed 50 to 73
-2. generated source changes to `moveup_right(73)`
-3. upload captures `workspacePolicy: 'replace'` with the matching workspace snapshot
-4. the saved workspace JSON is fragmented and reassembled as simulated notification data
-5. the recovered workspace remains editable
-6. edit speed to 88 and re-upload
-7. generated source changes to `moveup_right(88)`
-
-The mock completed two uploads successfully. This verifies the module-side product/payload loop only; it is not physical BLE, firmware, motor, light, or host-container certification.
-
-
-## v3.1 priority-stop transport behavior
-
-The original v3.0 game used a strict Promise send queue. Rapid UP/DOWN input could build a long backlog of `left`/`right` messages, causing `stop` to sit behind stale commands.
-
-v3.1 changes game-event delivery semantics:
-
-- UP/DOWN never enter BLE transport.
-- Normal game events are state notifications, not a historical command queue.
-- While one send is in flight, at most one newest normal event is retained.
-- A pending `stop` clears every queued normal event.
-- `stop` becomes the next event attempted immediately after the current in-flight GATT write finishes.
-- The manual-send rate limit is still respected.
-- A failed/BUSY `stop` is reported and is not silently auto-replayed, matching the iCreator SDK contract.
-
-The host cannot cancel a GATT write that is already in flight, so "priority stop" means "drop stale pending events and send stop immediately after the current write", not preemption of a write already accepted by the host.
-
-## Updating from v3.0
-
-The module keeps the same manifest ID and preserves SDK storage.
-
-A previously saved v3.0 device workspace is **not** overwritten automatically. If it still uses the original `moveup / left / right / stop` directional starter program, the editor shows a notice. Click **Starter Blocks** to replace it with the new `start / pipe / milestone / stop` starter mapping.
-
-
-The starter program intentionally does not keep the robot moving continuously after `start`. Motor motion is confined to a self-stopping milestone celebration, so a later missed STOP is less likely to leave a robot driving indefinitely.
-
-
-## v3.1.1 — restore current defaults
-
-Module updates preserve SDK storage, so an existing Blockly workspace is intentionally restored instead of silently overwritten by a new release.
-
-v3.1.1 makes this behavior explicit:
-
-- the editor always includes **Restore v3.1.1 Defaults**
-- older directional starter workspaces show an upgrade banner
-- restoring defaults first backs up the current workspace
-- the current workspace is then replaced with the current version's starter template
-- local metadata records `defaultTemplateVersion`
-
-This gives users a predictable recovery path after experimenting with or breaking the Blockly program, without destructive automatic migration.
-
-
-## v3.1.2 — restore button fix
-
-The restore action no longer depends on `window.confirm()`. Some sandboxed module hosts may suppress or fail to surface native modal dialogs, which can make the restore button appear unresponsive.
-
-Restore now:
-
-1. immediately changes the button to **Restoring…**
-2. backs up the current workspace
-3. replaces the editor with the current default workspace
-4. resizes Blockly
-5. regenerates the Python preview
-6. persists the restored workspace
-7. shows **Restored** and an explicit status message
-
-Errors are shown in the workspace status and module log instead of failing behind a modal.
+Local checks include strict TypeScript compilation, production generator/Python syntax checks, exact upload/readback payload loops, parser failure/timeout cases, priority-STOP queue pressure, progress ordering and actual game simulation goals. Browser-test evidence is written by the workflow, not assumed. Physical Crowbot and the actual iCreator App/web module containers remain untested here. See `VERIFICATION.md` in a CI-built release and the workflow logs for the exact checks/environment. No host module-kit validator was available in this repository.
