@@ -1,0 +1,140 @@
+
+> crowbot-parcel-pals@1.0.0 test
+> node --experimental-strip-types --test tests/*.test.ts
+
+TAP version 13
+# Subtest: mission 1 sample solves the real route; empty route does not
+ok 1 - mission 1 sample solves the real route; empty route does not
+  ---
+  duration_ms: 2.186998
+  type: 'test'
+  ...
+# Subtest: mission 2 sample solves the real route; empty route does not
+ok 2 - mission 2 sample solves the real route; empty route does not
+  ---
+  duration_ms: 0.270394
+  type: 'test'
+  ...
+# Subtest: mission 3 sample solves the real route; empty route does not
+ok 3 - mission 3 sample solves the real route; empty route does not
+  ---
+  duration_ms: 0.234771
+  type: 'test'
+  ...
+# Subtest: route checker catches pond, border, wrong delivery and missing park
+ok 4 - route checker catches pond, border, wrong delivery and missing park
+  ---
+  duration_ms: 0.29454
+  type: 'test'
+  ...
+# Subtest: each generated step is a bounded real physical action; snapshot timing round trips
+ok 5 - each generated step is a bounded real physical action; snapshot timing round trips
+  ---
+  duration_ms: 0.869889
+  type: 'test'
+  ...
+# Subtest: unchanged geometry does not change identity; semantic and tuning changes do
+ok 6 - unchanged geometry does not change identity; semantic and tuning changes do
+  ---
+  duration_ms: 0.236253
+  type: 'test'
+  ...
+# Subtest: out of bounds settings, disabled unknown and orphan blocks fail visibly
+ok 7 - out of bounds settings, disabled unknown and orphan blocks fail visibly
+  ---
+  duration_ms: 0.360569
+  type: 'test'
+  ...
+# Subtest: lesson three really requires repeats, not just a matching flattened path
+ok 8 - lesson three really requires repeats, not just a matching flattened path
+  ---
+  duration_ms: 0.123314
+  type: 'test'
+  ...
+# Subtest: Python executes changed vocabulary and guards wrong program/run/index/replays
+ok 9 - Python executes changed vocabulary and guards wrong program/run/index/replays
+  ---
+  duration_ms: 20.571715
+  type: 'test'
+  ...
+# Subtest: device cleanup still attempts right stop when left stop raises
+ok 10 - device cleanup still attempts right stop when left stop raises
+  ---
+  duration_ms: 22.679875
+  type: 'test'
+  ...
+# Subtest: 40 rapid step clicks produce one command and no observation-based progress
+ok 11 - 40 rapid step clicks produce one command and no observation-based progress
+  ---
+  duration_ms: 10.99033
+  type: 'test'
+  ...
+# Subtest: delivery progress is earned only by explicit observations; no automatic next step
+ok 12 - delivery progress is earned only by explicit observations; no automatic next step
+  ---
+  duration_ms: 5.212648
+  type: 'test'
+  ...
+# Subtest: STOP invalidates a rate-waiting command; nothing ordinary follows it
+ok 13 - STOP invalidates a rate-waiting command; nothing ordinary follows it
+  ---
+  duration_ms: 41.20408
+  type: 'test'
+  ...
+# Subtest: STOP follows only the accepted write, cannot be buried in input backlog
+ok 14 - STOP follows only the accepted write, cannot be buried in input backlog
+  ---
+  duration_ms: 1.802813
+  type: 'test'
+  ...
+# Subtest: failed stop is not automatically replayed
+ok 15 - failed stop is not automatically replayed
+  ---
+  duration_ms: 1.602885
+  type: 'test'
+  ...
+# Subtest: hiding during step cooldown cancels without hidden sends or later observations
+ok 16 - hiding during step cooldown cancels without hidden sends or later observations
+  ---
+  duration_ms: 1.858226
+  type: 'test'
+  ...
+# Subtest: readback streaming accepts split Unicode and rejects mixed telemetry
+ok 17 - readback streaming accepts split Unicode and rejects mixed telemetry
+  ---
+  duration_ms: 2.592774
+  type: 'test'
+  ...
+# Subtest: readback first-byte timeout reports failure
+ok 18 - readback first-byte timeout reports failure
+  ---
+  duration_ms: 5.036775
+  type: 'test'
+  ...
+# Subtest: readback filters stale connections, sessions and sequences
+ok 19 - readback filters stale connections, sessions and sequences
+  ---
+  duration_ms: 0.26103
+  type: 'test'
+  ...
+# Subtest: progress unlock order cannot skip a mission or reinterpret future data
+ok 20 - progress unlock order cannot skip a mission or reinterpret future data
+  ---
+  duration_ms: 0.156714
+  type: 'test'
+  ...
+# Subtest: real Link sends frozen workspace + source and supports notification readback
+ok 21 - real Link sends frozen workspace + source and supports notification readback
+  ---
+  duration_ms: 1.824486
+  type: 'test'
+  ...
+1..21
+# tests 21
+# suites 0
+# pass 21
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 195.02988
