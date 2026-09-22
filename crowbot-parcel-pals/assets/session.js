@@ -1,5 +1,8 @@
 import { stepWait } from './model.js';
 import { runtimeCommand } from './runtime.js';
+/** Cancellation before a write is distinguishable from an uncertain device failure. */
+export class CanceledCommandError extends Error {
+}
 /** No command backlog. STOP invalidates any selected command still waiting for its rate slot. */
 export class CommandGate {
     constructor(write, active, interval = 160) {
@@ -21,7 +24,7 @@ export class CommandGate {
         await Promise.resolve();
         await this.delay(Math.max(0, this.interval - (performance.now() - this.last)));
         if (e !== this.epoch || !this.active())
-            throw new Error('This command was canceled before sending.');
+            throw new CanceledCommandError('This command was canceled before sending.');
         this.last = performance.now();
         await this.write(text);
     }
@@ -76,6 +79,7 @@ export class DeliveryRun {
         this.changed = changed;
         this.active = active;
         this.timing = timing;
+        this.mode = 'guided';
         this.phase = 'idle';
         this.confirmed = 0;
         this.runId = '';

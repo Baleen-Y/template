@@ -1,6 +1,7 @@
 import { MODULE_ID, VERSION, BLOCK_SET, PROFILE, MISSIONS, DEFAULT_TUNING, blank, example, parse, evaluate, generate, registerBlocks, toolbox, clone, byteLength, tuning, readProgress, freshProgress, unlocked, ACTION_LABEL, ACTION_ICON, stepWait } from './model.js';
 import { Link, connectionKey, errorText } from './device.js';
 import { DeliveryRun, CommandGate } from './session.js';
+import { CruiseRun } from './cruise.js';
 import { renderBoard } from './board.js';
 import { keyInput, keyLabel, acceptsInput } from './controls.js';
 import { runtimeCommand } from './runtime.js';
@@ -109,7 +110,8 @@ function setScreen(next) {
         requestAnimationFrame(() => $('playScreen').focus({ preventScroll: true }));
     update();
 }
-function activeRun() { return !!run && ['arming', 'ready', 'sending', 'observe'].includes(run.phase); }
+function activeRun() { return !!run && ['arming', 'ready', 'sending', 'observe', 'cruising', 'pausing', 'paused', 'finishing', 'review'].includes(run.phase); }
+function cruiseSelected() { return mission.id >= 2 && !$('guidedHelp').checked; }
 function allowedUiChange() { return !busy && !link?.operation && !activeRun() && !gate?.busy; }
 function checkNow() {
     const raw = snapshot();
@@ -203,6 +205,7 @@ function paintMission() {
     $('buildSkill').textContent = mission.skill;
     $('buildTitle').textContent = mission.title;
     $('hintText').textContent = mission.hint;
+    $('modeChoice').classList.toggle('hidden', mission.id === 1);
     renderBoard($('briefBoard'), mission);
     renderBoard($('buildBoard'), mission);
     renderBoard($('setupBoard'), mission);
@@ -249,6 +252,7 @@ async function selectMission(id) {
     readCandidate = null;
     editorMission = 0;
     protectedDraft = false;
+    $('guidedHelp').checked = false;
     let raw = null;
     if (sdk) {
         try {
@@ -313,7 +317,11 @@ function update() {
     set('practiceOpen', ready && $('floorReady').checked && !activeRun());
     set('practiceClose', !busy && !gate?.busy);
     $('practicePanel').classList.toggle('hidden', !practice);
-    set('start', ready && !practice && $('floorReady').checked && $('startReady').checked);
+    set('start', ready && !move && !practice && $('floorReady').checked && $('startReady').checked);
+    $('start').textContent = cruiseSelected() ? '4. Start route cruise →' : '4. Open guided delivery →';
+    $('deliveryModeTitle').textContent = cruiseSelected() ? 'One start. Let your blocks drive.' : 'First delivery: learn one step at a time.';
+    $('deliveryModeText').textContent = cruiseSelected() ? 'Watch your uploaded route run from start to finish. No step-by-step Yes buttons. Pause anytime; confirm the whole delivery once at the end. Keep hands away while moving.' : 'Use the highlighted arrow or Space, then click what you saw. We’ll show you each step before the next movement.';
+    $('floorModeNote').textContent = cruiseSelected() ? 'Route cruise sends the whole finite route at estimated intervals. An adult must watch and be ready to STOP. The map cannot sense obstacles or drift.' : 'One short move per tap. Watch Bolt and confirm each step.';
     for (const id of ['testForward', 'testLeft', 'testRight', 'practiceForward', 'practiceLeft', 'practiceRight'])
         set(id, ready && $('floorReady').checked);
     set('practiceStop', canHardware() && !op);
@@ -502,7 +510,7 @@ async function testPulse(action) {
     }
 }
 async function startRun() {
-    if (!lightVerified() || !canHardware() || busy || attention || practice || !$('floorReady').checked || !$('startReady').checked)
+    if (!lightVerified() || !canHardware() || activeRun() || busy || attention || practice || !$('floorReady').checked || !$('startReady').checked)
         throw new Error('Upload, check the light, and place Bolt at START first.');
     const artifact = generate(snapshot(), mission), expected = receipt.connection;
     busy = true;
@@ -513,9 +521,19 @@ async function startRun() {
             throw new Error('The session changed before delivery.');
         runError = '';
         controlHint = '';
-        lastInput = 'No movement requested yet. Use the highlighted arrow or Space.';
+        lastInput = cruiseSelected() ? 'Route cruise explicitly started.' : 'No movement requested yet. Use the highlighted arrow or Space.';
         gate = newGate(expected);
-        run = new DeliveryRun(artifact, gate, () => paintRun(), () => visible && !disposed && matches());
+        const changed = () => {
+            if (run instanceof CruiseRun && run.error) {
+                attention = true;
+                receipt = null;
+                runError = run.error;
+            }
+            paintRun();
+        };
+        run = cruiseSelected() ? new CruiseRun(artifact, gate, changed, () => visible && !disposed && matches()) : new DeliveryRun(artifact, gate, changed, () => visible && !disposed && matches());
+        $('playScreen').dataset.mode = run.mode;
+        $('playTitle').textContent = run.mode === 'cruise' ? 'Your code takes the wheel.' : 'Your route. Your arrow keys.';
         setScreen('play');
         $('playMission').textContent = 'DELIVERY ' + mission.id + ' · ' + mission.title;
         await run.begin(nonce());
@@ -534,6 +552,15 @@ async function startRun() {
 function paintRun() {
     if (!run || screen !== 'play' || disposed)
         return;
+    if (run instanceof CruiseRun) {
+        paintCruise(run);
+        return;
+    }
+    $('playBoard').style.width = '';
+    $('playBoard').style.maxHeight = '';
+    $('mapConfirmedLabel').textContent = '🚙 Last place you confirmed';
+    $('mapGhostLabel').textContent = '◌ Dashed arrow = next planned place';
+    $('mapCaption').textContent = 'Not live tracking. A sent message does not confirm movement.';
     const i = run.confirmed, p = run.artifact.program, step = p.steps[i], phase = run.phase;
     const previous = i > 0 ? assessment.trace[i - 1] : null, next = assessment.trace[i];
     renderBoard($('playBoard'), mission, { position: previous?.position ?? mission.start, delivered: previous?.delivered ?? 0, ghost: ['sending', 'observe', 'ready'].includes(phase) ? next?.position : undefined });
@@ -562,6 +589,72 @@ function paintRun() {
     $('confirmStep').textContent = action === 'deliver' ? 'Parcel delivered — I saw it ✓' : 'Yes, I saw it ✓';
     $('runStatus').textContent = phase === 'arming' ? 'Preparing a fresh route session — no motion yet.' : phase === 'sending' ? 'Command sent or sending. Wait, then check the real robot.' : phase === 'observe' ? 'Your observation is needed. We cannot sense Bolt’s position.' : phase === 'aborted' ? (runError || 'Delivery paused/ended. Attend to Bolt, then return to setup.') : phase === 'done' ? 'Finishing your delivery…' : 'Ready — nothing moves automatically. Press the highlighted arrow, Space, or the big action button.';
 }
+function paintCruise(cruise) {
+    const p = cruise.artifact.program, phase = cruise.phase, i = cruise.cursor, total = p.steps.length;
+    const next = assessment.trace[i], last = i > 0 ? assessment.trace[i - 1] : null;
+    renderBoard($('playBoard'), mission, {
+        position: cruise.confirmed === total ? last?.position : mission.start,
+        delivered: cruise.confirmed === total ? mission.houses.length : 0,
+        ghost: phase === 'cruising' || phase === 'pausing' ? next?.position : last?.position,
+        trace: assessment.trace.slice(0, i)
+    });
+    $('mapConfirmedLabel').textContent = '🚙 Start you confirmed';
+    $('mapGhostLabel').textContent = '◌ Dashed arrow = program preview, not GPS';
+    $('mapCaption').textContent = 'Watch the real robot. Preview advances on estimated timing, not sensed position.';
+    $('stepStrip').replaceChildren();
+    p.steps.forEach((step, n) => {
+        const el = document.createElement('span');
+        el.className = 'stepChip' + (n < i ? ' plannedDone' : n === i ? ' current' : '');
+        el.textContent = ACTION_ICON[step.action];
+        el.title = ACTION_LABEL[step.action] + (n < i ? ' · pacing completed, unverified' : '');
+        $('stepStrip').append(el);
+    });
+    $('cruiseCount').textContent = `${i} / ${total} route steps`;
+    $('cruiseProgress').max = total;
+    $('cruiseProgress').value = i;
+    $('cruiseNow').textContent = phase === 'cruising' ? (p.steps[i] ? ACTION_ICON[p.steps[i].action] + ' ' + ACTION_LABEL[p.steps[i].action] : 'Parking…') : phase === 'arming' ? 'Getting ready…' : phase === 'pausing' ? 'Pausing after this short action…' : phase === 'paused' ? 'Paused — check Bolt.' : phase === 'finishing' ? 'Sending final STOP…' : phase === 'review' ? 'How did your delivery go?' : phase === 'done' ? 'Delivery observed!' : 'Route stopped';
+    $('cruiseStatus').textContent = phase === 'review' ? 'Route messages and final STOP were written. Did you see the route, delivery lights and final stop? Place paper parcels only after the wheels are stopped.' : phase === 'paused' ? 'STOP was written. Resume only if Bolt is still at the expected place and heading; otherwise end and reset.' : phase === 'aborted' ? (runError || cruise.error || 'No more moves are scheduled. Attend to Bolt, then return to setup.') : 'Your program chooses each step. No clicking needed. Watch from a safe distance; pause if Bolt goes off the route.';
+    $('cruiseSafetyNote').textContent = phase === 'pausing' ? 'An already-accepted move may finish first. Use STOP ROBOT for an immediate stop request.' : 'The route is not obstacle-aware. Keep hands clear; stopping is not physically acknowledged.';
+    const pause = $('pauseCruise');
+    pause.textContent = phase === 'paused' ? '▶ Resume route' : 'Ⅱ Pause';
+    pause.toggleAttribute('disabled', busy || !['cruising', 'paused'].includes(phase));
+    pause.classList.toggle('hidden', ['review', 'done', 'aborted'].includes(phase));
+    $('cruiseReview').classList.toggle('hidden', phase !== 'review');
+    $('cruiseConfirm').toggleAttribute('disabled', busy || phase !== 'review' || !matches());
+    $('cruiseAdjust').toggleAttribute('disabled', busy || phase !== 'review');
+    $('cruiseReturn').classList.toggle('hidden', phase !== 'aborted');
+    requestAnimationFrame(resizeCruiseMap);
+    $('cruiseShortcut').textContent = phase === 'review' ? 'Confirm once below. Space and Enter will not answer for you.' : phase === 'paused' ? 'Space / P to resume · Esc / ↓ to end' : 'Space / P to pause · Esc / ↓ to end';
+}
+function resizeCruiseMap() {
+    if (disposed || screen !== 'play' || !(run instanceof CruiseRun))
+        return;
+    const board = $('playBoard'), map = board.parentElement;
+    if (innerHeight < 611) {
+        board.style.width = '';
+        board.style.maxHeight = '';
+        return;
+    }
+    let used = 0;
+    for (const child of Array.from(map.children))
+        if (child !== board) {
+            const css = getComputedStyle(child);
+            used += child.getBoundingClientRect().height + (parseFloat(css.marginTop) || 0) + (parseFloat(css.marginBottom) || 0);
+        }
+    const width = Math.floor(Math.min(map.clientWidth, Math.max(120, map.clientHeight - used - 8) * mission.width / mission.height));
+    if (Math.abs(board.getBoundingClientRect().width - width) > 1)
+        board.style.width = width + 'px';
+    board.style.maxHeight = 'none';
+}
+async function toggleCruisePause() {
+    if (!(run instanceof CruiseRun) || busy || !visible || disposed || !$('modal').classList.contains('hidden'))
+        return;
+    if (run.phase === 'cruising')
+        await run.pause();
+    else if (run.phase === 'paused')
+        await run.resume(nonce());
+    update();
+}
 function blockedInput(text) { controlHint = text; lastInput = text; if (screen === 'play')
     paintRun();
 else if (practice)
@@ -583,6 +676,8 @@ async function routeInput(input) {
         blockedInput('Wait for this action to finish. Extra taps are not queued.');
         return;
     }
+    if (run instanceof CruiseRun)
+        return;
     const action = run.artifact.program.steps[run.confirmed]?.action;
     if (!acceptsInput(input, action)) {
         blockedInput('Your program says ' + (action ? ACTION_LABEL[action] : 'finish') + '. Press ' + keyLabel(action) + ' instead. No command was sent for this key.');
@@ -603,8 +698,9 @@ async function routeInput(input) {
 }
 async function drive() { return routeInput('next'); }
 function keyboard(e) {
+    const pauseKey = e.key.toLowerCase() === 'p';
     const input = keyInput(e.key);
-    if (!input || e.ctrlKey || e.altKey || e.metaKey || e.isComposing)
+    if ((!input && !pauseKey) || e.ctrlKey || e.altKey || e.metaKey || e.isComposing)
         return;
     if (!visible || disposed || !$('modal').classList.contains('hidden') || !$('tools').classList.contains('hidden'))
         return;
@@ -613,9 +709,18 @@ function keyboard(e) {
         return;
     if (screen !== 'play' && !(screen === 'setup' && practice))
         return;
-    // Prevent native Space/Enter button activation; held arrows must never create a motor stream.
     e.preventDefault();
     if (e.repeat)
+        return;
+    if (screen === 'play' && run instanceof CruiseRun) {
+        if (input === 'stop')
+            void stopRobot().catch(err => failure('Cruise STOP', err));
+        else if (e.key === ' ' || pauseKey)
+            void toggleCruisePause().catch(err => failure('Cruise pause', err));
+        // No directional commands and no keyboard-confirmed physical success.
+        return;
+    }
+    if (!input)
         return;
     if (screen === 'play') {
         void routeInput(input).catch(err => failure('Keyboard', err));
@@ -634,7 +739,7 @@ function keyboard(e) {
     }
 }
 async function confirmStep() {
-    if (!run)
+    if (!run || busy)
         return;
     controlHint = '';
     lastInput = 'You confirmed the previous action. Choose the next step.';
@@ -645,7 +750,7 @@ async function confirmStep() {
     update();
     try {
         const finishedRun = run;
-        const stopped = await gate.stop();
+        const stopped = finishedRun instanceof CruiseRun && finishedRun.stopWritten ? true : await gate.stop();
         if (!stopped)
             throw new Error('Finish STOP could not be sent. Attend to Bolt before continuing.');
         if (disposed || !visible || run !== finishedRun || finishedRun.phase !== 'done' || !matches())
@@ -654,7 +759,7 @@ async function confirmStep() {
         progress.deliveries[mission.id - 1] = mission.houses.length;
         if (progressWritable)
             await store('parcel.v1.progress', progress);
-        await store(`parcel.v1.observed.${mission.id}`, { completedAt: new Date().toISOString(), confirmation: 'user-observed', steps: run.confirmed, assisted: progress.assisted[mission.id - 1] });
+        await store(`parcel.v1.observed.${mission.id}`, { completedAt: new Date().toISOString(), confirmation: 'user-observed', observationScope: run.mode === 'cruise' ? 'whole-route' : 'per-step', mode: run.mode, steps: run.confirmed, assisted: progress.assisted[mission.id - 1] });
         $('resultTitle').textContent = mission.houses.length === 1 ? `${mission.houses[0].name}’s parcel is here!` : 'Two friends. Two happy deliveries!';
         $('resultText').textContent = 'You made a plan, programmed real wheels, and checked what happened. That’s a robot engineer’s delivery!';
         $('resultFriends').replaceChildren();
@@ -824,6 +929,9 @@ function visibilityChanged() {
     update();
 }
 function bind() {
+    const mapObserver = new ResizeObserver(resizeCruiseMap);
+    mapObserver.observe($('playBoard').parentElement);
+    observers.push(mapObserver);
     click('begin', () => selectMission(progress.selected));
     click('home', async () => { if (allowedUiChange()) {
         await saveDraft();
@@ -886,6 +994,11 @@ function bind() {
     click('applyTuning', applyTuning);
     for (const [id, action] of [['testForward', 'forward'], ['testLeft', 'left'], ['testRight', 'right']])
         click(id, () => testPulse(action));
+    listen($('guidedHelp'), 'change', () => update());
+    click('pauseCruise', toggleCruisePause);
+    click('cruiseConfirm', confirmStep);
+    click('cruiseAdjust', () => leaveRun(true));
+    click('cruiseReturn', () => leaveRun(true));
     listen($('floorReady'), 'change', () => update());
     listen($('startReady'), 'change', () => update());
     listen(document, 'keydown', keyboard);
@@ -908,6 +1021,8 @@ function bind() {
     click('resultHome', () => { renderCards(); setScreen('home'); });
     click('noMovement', async () => { await leaveRun(true); lightCheck = 'failed'; lightReceipt = ''; $('testStatus').textContent = 'No movement reported. Recheck the light first. If the light works but wheels do not, check motor power/library and short-action settings with an adult.'; update(); });
     const openTools = async () => {
+        if (run instanceof CruiseRun && ['cruising', 'pausing'].includes(run.phase))
+            await run.pause();
         if (document.fullscreenElement === $('playScreen'))
             await document.exitFullscreen();
         $('tools').classList.remove('hidden');

@@ -35,7 +35,7 @@ page.on('pageerror',(e:any)=>errors.push(e.message));page.on('request',(r:any)=>
 const shot=async(name:string)=>page.screenshot({path:'test-results/'+name+'.png',fullPage:true});
 const waitScreen=async(n:string)=>page.waitForFunction((x:string)=>document.body.dataset.screen===x,n);
 const student=()=>{};
-async function buildMission(id:number){if(id===1)await page.click('#begin');else await page.click('#nextMission');await waitScreen('brief');await page.click('#build');await waitScreen('build');await page.waitForSelector('#student .blocklyDraggable');}
+async function buildMission(id:number){if(id===1)await page.click('#begin');else if(await page.locator('#nextMission').isVisible())await page.click('#nextMission');else await page.locator('.missionCard').nth(id-1).click();await waitScreen('brief');await page.click('#build');await waitScreen('build');await page.waitForSelector('#student .blocklyDraggable');}
 async function copy(){await page.locator('#help').evaluate((e:any)=>e.open=true);await page.click('#copyExample');await page.waitForSelector('#modal:not(.hidden)');await page.click('#modalYes');await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#toSetup')!.disabled);}
 async function upload(){
  await page.click('#upload');await page.waitForFunction(()=>document.querySelector('#uploadNotice')!.textContent!.includes('upload acknowledged'));
@@ -87,11 +87,15 @@ try{
  checks.push('actual SDK upload/readback/edit/re-upload paths with fragmented mock notifications; no device-source claim');
  for(let mission=1;mission<=3;mission++){
    if(mission>1){await buildMission(mission);await copy();await page.click('#toSetup');await upload();await page.check('#floorReady');await page.check('#startReady');}
-   await page.click('#start');await waitScreen('play');await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#drive')!.disabled);
+   const runWriteBase=await page.evaluate(()=>(window as any).__mock.sends.length);
+   await page.click('#start');await waitScreen('play');
+   if(mission===1)await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#drive')!.disabled);
+   else await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#pauseCruise')!.disabled);
    const bounds=await page.locator('#playScreen').boundingBox();assert.ok(bounds.width>=1439&&bounds.height>=949);assert.equal(await page.locator('#student').isVisible(),false);
    const cellSizes=await page.locator('#playBoard .tile').evaluateAll((nodes:any[])=>nodes.map(n=>({width:n.getBoundingClientRect().width,height:n.getBoundingClientRect().height})));assert.ok(cellSizes.every((s:any)=>Math.abs(s.width-s.height)<3),'Floor map uses equal square cells');
    if(mission===1){await page.evaluate(()=>{document.querySelector<HTMLElement>('#playScreen')!.requestFullscreen=()=>Promise.reject(new Error('Denied'));});await page.click('#fullscreen');await shot('parcel-controls-ready');}
    const steps=await page.evaluate(async()=>{const m=await import('./assets/model.js');return m.parse((window as any).__mock.deviceWorkspace).steps.length;});
+   if(mission===1){
    for(let step=0;step<steps;step++){
      const nextAction=await page.evaluate(async(i:number)=>{const m=await import('./assets/model.js');return m.parse((window as any).__mock.deviceWorkspace).steps[i].action;},step);
      const key=nextAction==='forward'?'ArrowUp':nextAction==='left'?'ArrowLeft':nextAction==='right'?'ArrowRight':' ';
@@ -109,8 +113,46 @@ try{
      if(mission===2&&step===3)await shot('parcel-turn-observation');
      await page.click('#confirmStep');if(step+1<steps)await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#drive')!.disabled);
    }
+   }else{
+     assert.equal(await page.locator('.actionPanel').isVisible(),false);
+     assert.equal(await page.locator('#observe').isVisible(),false);
+     assert.equal(await page.locator('#routeForward').isVisible(),false);
+     assert.match(await page.locator('#mapCaption').innerText(),/estimated timing/);
+     // Cruise counts planned steps only, with no earned delivery/tick before observation.
+     assert.equal(await page.locator('#playBoard .deliveryTick').count(),0);
+     if(mission===2){
+       await page.waitForFunction((base:number)=>(window as any).__mock.sends.slice(base).filter((s:any)=>s.text[10]==='s').length>0,runWriteBase);
+       await page.keyboard.press(' ');await page.waitForFunction(()=>document.querySelector('#pauseCruise')!.textContent!.includes('Resume'));
+       const paused=await page.evaluate(()=>(window as any).__mock.sends.length);await page.waitForTimeout(400);assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),paused);
+       assert.equal(await page.evaluate(()=>(window as any).__mock.sends.at(-1).text),'stop');await shot('parcel-cruise-paused');
+       await page.setViewportSize({width:700,height:940});await page.waitForTimeout(180);
+       const layout=await page.evaluate(()=>{const r=document.querySelector('#playBoard')!.getBoundingClientRect(),p=document.querySelector('#cruisePanel')!.getBoundingClientRect();return{right:r.right,bottom:r.bottom,footerTop:p.top,footerBottom:p.bottom,w:innerWidth,h:innerHeight,scroll:document.documentElement.scrollWidth};});
+       assert.ok(layout.right<=layout.w+1&&layout.bottom<=layout.footerTop+1&&layout.footerBottom<=layout.h+1&&layout.scroll<=layout.w+1,JSON.stringify(layout));
+       await shot('parcel-cruise-mobile');await page.setViewportSize({width:1440,height:950});await page.waitForTimeout(100);
+       await page.click('#pauseCruise');await page.waitForFunction(()=>document.querySelector('#pauseCruise')!.textContent!.includes('Pause'));
+       await shot('parcel-cruise-running');
+     }else{
+       // No extra movement is generated by held/repeated direction keys during cruise.
+       await page.keyboard.down('ArrowUp');await page.keyboard.down('ArrowUp');await page.keyboard.up('ArrowUp');
+       await shot('parcel-cruise-mission-3');
+     }
+     await page.waitForSelector('#cruiseReview:not(.hidden)',{timeout:25000});
+     assert.equal(await page.locator('#observe').isVisible(),false);
+     const writes=await page.evaluate((base:number)=>(window as any).__mock.sends.slice(base),runWriteBase);
+     assert.deepEqual(writes.filter((s:any)=>s.text[10]==='s').map((s:any)=>parseInt(s.text.slice(-2),16)),Array.from({length:steps},(_,i)=>i));
+     assert.equal(writes.at(-1).text,'stop');
+     assert.equal(await page.evaluate((i:number)=>(window as any).__mock.stored['parcel.v1.progress'].cleared[i],mission-1),false);
+     assert.equal(await page.locator('#playBoard .deliveryTick').count(),0);
+     await page.focus('#cruiseConfirm');await page.keyboard.press(' ');await page.keyboard.press('Enter');await page.waitForTimeout(120);
+     assert.equal(await page.locator('#cruiseReview').isVisible(),true);
+     const n=await page.evaluate(()=>(window as any).__mock.sends.length);
+     await shot('parcel-cruise-finish');
+     if(mission===3){await page.setViewportSize({width:700,height:940});await page.waitForTimeout(180);const bottom=await page.locator('#cruiseConfirm').boundingBox();assert.ok(bottom&&bottom.y+bottom.height<=940);await shot('parcel-cruise-mobile-finish');await page.setViewportSize({width:1440,height:950});await page.waitForTimeout(100);}
+     await page.click('#cruiseConfirm');await waitScreen('result');
+     assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),n,'End observation does not send another redundant STOP');
+   }
    await waitScreen('result');assert.equal(await page.evaluate(()=>(window as any).__mock.sends.at(-1).text),'stop');assert.equal(await page.evaluate((i:number)=>(window as any).__mock.stored['parcel.v1.progress'].cleared[i],mission-1),true);
-   checks.push(`mission ${mission}: actual Arrow/Space keyboard completes uploaded route; repeat events cannot queue moves; keyboard cannot confirm observations; parking and unlock verified`);
+   checks.push(mission===1?'mission 1 retains guided arrow controls, explicit per-step observation and no held-key motion queue':`mission ${mission}: one start executes finite route without per-step clicks; single final observation earns completion; cursor is explicitly a plan`);
  }
  await shot('parcel-result');const persisted=await page.evaluate(()=>(window as any).__mock.stored);assert.deepEqual(persisted['parcel.v1.progress'].cleared,[true,true,true]);assert.ok(persisted['parcel.v1.stage.1'].blocks.blocks[0].data.includes('440'));
  // Reopen: no stale upload authorization. Mobile workshop uses tabs.
@@ -121,6 +163,18 @@ try{
  checks.push('mid-step STOP ends the run, cancels pending observation, and never queues an extra move');
  await page.click('#exitPlay');await waitScreen('setup');await upload();await page.check('#startReady');await page.click('#start');await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#drive')!.disabled);const count=await page.evaluate(()=>(window as any).__mock.sends.length);await page.evaluate(()=>(window as any).__mock.hide(false));await page.waitForTimeout(150);assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),count);await page.evaluate(()=>(window as any).__mock.hide(true));assert.equal(await page.locator('#drive').isDisabled(),true);
  checks.push('hidden module sends nothing, invalidates the run/receipt and requires renewed attention');
+ // A fresh second-mission cruise must stop on user STOP with no subsequent timer motion.
+ await page.click('#exitPlay');await waitScreen('setup');await page.click('#home');await buildMission(2);await page.click('#toSetup');await upload();await page.check('#floorReady');await page.check('#startReady');
+ await page.click('#start');await waitScreen('play');await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#pauseCruise')!.disabled);
+ await page.click('#emergencyStop');await page.waitForSelector('#cruiseReturn:not(.hidden)');await page.waitForFunction(()=>(window as any).__mock.sends.at(-1).text==='stop');
+ const stopCount=await page.evaluate(()=>(window as any).__mock.sends.length);await page.waitForTimeout(1300);assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),stopCount);assert.equal(await page.locator('#cruiseReview').isVisible(),false);
+ checks.push('cruise STOP cancels future scheduled motion; pause/resume uses fresh nonce and no step replay; final observation is never a keyboard shortcut');
+ await page.click('#cruiseReturn');await waitScreen('setup');await upload();await page.check('#startReady');await page.click('#start');await waitScreen('play');await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#pauseCruise')!.disabled);
+ await page.evaluate(()=>(window as any).__mock.hide(false));const hiddenCount=await page.evaluate(()=>(window as any).__mock.sends.length);await page.waitForTimeout(1000);assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),hiddenCount);await page.evaluate(()=>(window as any).__mock.hide(true));assert.equal(await page.locator('#cruiseReturn').isVisible(),true);
+ // User can ask for tutorial mode again, without modifying their workspace or program.
+ await page.click('#cruiseReturn');await waitScreen('setup');await upload();await page.check('#startReady');await page.locator('#modeChoice').evaluate((e:any)=>e.open=true);await page.check('#guidedHelp');await page.click('#start');await waitScreen('play');
+ assert.equal(await page.locator('.actionPanel').isVisible(),true);assert.equal(await page.locator('#cruisePanel').isVisible(),false);await page.click('#emergencyStop');
+ checks.push('hiding cruise cancels timers and authorization; optional step-by-step helper remains available on later missions');
  const noSdk=await browser.newPage();await noSdk.goto(url);await noSdk.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#begin')!.disabled);assert.match(await noSdk.locator('#sdkWarning').innerText(),/Open this module in iCreator/);await noSdk.close();
  checks.push('missing SDK is clearly labeled; release never fabricates a device or position telemetry');
  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.deepEqual(failed,[]);checks.push('zero uncaught browser errors, missing local resources or external runtime requests');

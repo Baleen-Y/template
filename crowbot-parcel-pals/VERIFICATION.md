@@ -1,8 +1,8 @@
-# Verification — Crowbot Parcel Pals 1.1.0
+# Verification — Crowbot Parcel Pals 1.2.0
 
-Source commit: 49fbb6d70ce58ed11b9619c1a888fa664c87982f
+Source commit: c00240ca82db3182562f24cfafc860a1786f73d1
 
-Strict TypeScript 5.8.3 build; 26 production-code unit/protocol tests passed.
+Strict TypeScript 5.8.3 build; 38 production-code unit/protocol tests passed.
 
 Browser: 140.0.7339.186
 headless Chromium; real Blockly and production ES modules; mocked iCreator SDK; no physical device, real host or Blob URL certification
@@ -15,12 +15,14 @@ headless Chromium; real Blockly and production ES modules; mocked iCreator SDK; 
 - wheel timing is serialized in the actual snapshot, changes generated Python, and requires re-upload; bounded explicit calibration test
 - explicit Practice mode supports forward and both turns by keyboard; Down stops; every test resets the floor-start checkbox
 - actual SDK upload/readback/edit/re-upload paths with fragmented mock notifications; no device-source claim
-- mission 1: actual Arrow/Space keyboard completes uploaded route; repeat events cannot queue moves; keyboard cannot confirm observations; parking and unlock verified
-- mission 2: actual Arrow/Space keyboard completes uploaded route; repeat events cannot queue moves; keyboard cannot confirm observations; parking and unlock verified
-- mission 3: actual Arrow/Space keyboard completes uploaded route; repeat events cannot queue moves; keyboard cannot confirm observations; parking and unlock verified
+- mission 1 retains guided arrow controls, explicit per-step observation and no held-key motion queue
+- mission 2: one start executes finite route without per-step clicks; single final observation earns completion; cursor is explicitly a plan
+- mission 3: one start executes finite route without per-step clicks; single final observation earns completion; cursor is explicitly a plan
 - reopening preserves drafts/timing/progress but not live upload authorization; 700px learning tabs and no horizontal overflow
 - mid-step STOP ends the run, cancels pending observation, and never queues an extra move
 - hidden module sends nothing, invalidates the run/receipt and requires renewed attention
+- cruise STOP cancels future scheduled motion; pause/resume uses fresh nonce and no step replay; final observation is never a keyboard shortcut
+- hiding cruise cancels timers and authorization; optional step-by-step helper remains available on later missions
 - missing SDK is clearly labeled; release never fabricates a device or position telemetry
 - zero uncaught browser errors, missing local resources or external runtime requests
 

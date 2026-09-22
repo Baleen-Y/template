@@ -1,8 +1,8 @@
 {
   "adapterId": "parcel-crowbot-esp32",
-  "adapterVersion": "1.1.0",
+  "adapterVersion": "1.2.0",
   "blockSetId": "parcel-route-v1",
-  "generatorVersion": "1.1.0",
+  "generatorVersion": "1.2.0",
   "profileId": "integem-crowbot-mqtt-v1",
   "evidence": "supplied host-supported + firmware-inspected contract; not physical validation",
   "gatt": {

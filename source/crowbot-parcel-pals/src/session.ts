@@ -1,5 +1,7 @@
 import {Artifact, Action, stepWait} from './model.js';
 import {runtimeCommand} from './runtime.js';
+/** Cancellation before a write is distinguishable from an uncertain device failure. */
+export class CanceledCommandError extends Error {}
 /** No command backlog. STOP invalidates any selected command still waiting for its rate slot. */
 export class CommandGate {
   private flight:Promise<void>|null=null;private epoch=0;private last=-Infinity;private pendingStop:Promise<boolean>|null=null;
@@ -9,7 +11,7 @@ export class CommandGate {
   private async delay(ms:number):Promise<void>{if(ms<=0)return;await new Promise<void>(resolve=>{this.wake=resolve;this.timer=setTimeout(resolve,ms);});if(this.timer)clearTimeout(this.timer);this.timer=null;this.wake=null;}
   private async transmit(text:string,e:number):Promise<void>{
     await Promise.resolve();await this.delay(Math.max(0,this.interval-(performance.now()-this.last)));
-    if(e!==this.epoch||!this.active())throw new Error('This command was canceled before sending.');
+    if(e!==this.epoch||!this.active())throw new CanceledCommandError('This command was canceled before sending.');
     this.last=performance.now();await this.write(text);
   }
   async send(text:string):Promise<void>{
@@ -32,6 +34,7 @@ export class CommandGate {
 }
 export type Phase='idle'|'arming'|'ready'|'sending'|'observe'|'done'|'aborted';
 export class DeliveryRun {
+  readonly mode = 'guided';
   phase:Phase='idle';confirmed=0;runId='';private epoch=0;private timer:ReturnType<typeof setTimeout>|null=null;private wake:(()=>void)|null=null;
   constructor(readonly artifact:Artifact,readonly gate:CommandGate,private changed:()=>void,private active:()=>boolean,private timing=(a:Action)=>stepWait(a,artifact.program.tuning)){}
   private set(p:Phase):void{this.phase=p;this.changed();}

@@ -1,0 +1,172 @@
+import { stepWait } from './model.js';
+import { CanceledCommandError } from './session.js';
+import { runtimeCommand } from './runtime.js';
+/** A finite, explicitly started route. No sensor/step ACK is implied by pacing.
+ * cursor counts estimated/paced steps; confirmed stays zero until the user
+ * observes the whole delivery. No automatic retries or future-run replay.
+ */
+export class CruiseRun {
+    constructor(artifact, gate, changed, active, timing = a => stepWait(a, artifact.program.tuning)) {
+        this.artifact = artifact;
+        this.gate = gate;
+        this.changed = changed;
+        this.active = active;
+        this.timing = timing;
+        this.mode = 'cruise';
+        this.phase = 'idle';
+        this.cursor = 0;
+        this.confirmed = 0;
+        this.runId = '';
+        this.error = '';
+        this.stopWritten = false;
+        this.nextIndex = 0;
+        this.epoch = 0;
+        this.pauseWanted = false;
+        this.loop = null;
+        this.timer = null;
+        this.wake = null;
+    }
+    set(p) { this.phase = p; this.changed(); }
+    alive(e) { return e === this.epoch && this.active(); }
+    async delay(ms) {
+        await new Promise(resolve => { this.wake = resolve; this.timer = setTimeout(resolve, ms); });
+        if (this.timer)
+            clearTimeout(this.timer);
+        this.timer = null;
+        this.wake = null;
+    }
+    fail(error, e) {
+        if (e !== this.epoch)
+            return;
+        this.error = error instanceof Error ? error.message : String(error);
+        this.gate.cancel();
+        this.set('aborted');
+    }
+    async begin(nonce) {
+        if (this.phase !== 'idle')
+            throw new Error('Start a new cruise from robot setup.');
+        await this.arm(nonce);
+    }
+    async arm(nonce) {
+        if (!this.active())
+            throw new Error('The current visible device session is unavailable.');
+        if (!/^[a-f0-9]{6}$/.test(nonce) || nonce === this.runId)
+            throw new Error('Use a fresh route nonce.');
+        const e = ++this.epoch;
+        this.runId = nonce;
+        this.pauseWanted = false;
+        this.stopWritten = false;
+        this.set('arming');
+        try {
+            // New callback supports arming at the NEXT unsent step after a user resume.
+            await this.gate.send(runtimeCommand(this.artifact.tag, 'a', nonce, this.nextIndex));
+            if (!this.alive(e))
+                return;
+            this.set('cruising');
+            // Start on a microtask so the loop handle exists even for an immediate failure.
+            const work = Promise.resolve().then(() => this.pump(e));
+            this.loop = work;
+            void work.finally(() => { if (this.loop === work)
+                this.loop = null; }).catch(() => undefined);
+        }
+        catch (error) {
+            this.fail(error, e);
+            throw error;
+        }
+    }
+    async pump(e) {
+        try {
+            while (this.alive(e) && this.nextIndex < this.artifact.program.steps.length) {
+                if (this.pauseWanted) {
+                    await this.parkForPause(e);
+                    return;
+                }
+                const index = this.nextIndex;
+                const action = this.artifact.program.steps[index].action;
+                this.changed();
+                try {
+                    await this.gate.send(runtimeCommand(this.artifact.tag, 's', this.runId, index));
+                }
+                catch (error) {
+                    // Pause may cancel a command still waiting for its rate slot. It was
+                    // NOT accepted; do not consume its index. Genuine write failures abort.
+                    if (error instanceof CanceledCommandError && this.pauseWanted && this.alive(e)) {
+                        await this.parkForPause(e);
+                        return;
+                    }
+                    throw error;
+                }
+                if (!this.alive(e))
+                    return;
+                this.nextIndex = index + 1;
+                // A requested pause does not shorten this conservative, non-ACK delay.
+                // That keeps Resume from replaying or overlapping an accepted pulse.
+                await this.delay(this.timing(action));
+                if (!this.alive(e))
+                    return;
+                this.cursor = this.nextIndex;
+                this.changed();
+            }
+            if (!this.alive(e))
+                return;
+            this.set('finishing');
+            const stopped = await this.gate.stop();
+            if (!this.alive(e))
+                return;
+            if (!stopped)
+                throw new Error('Final STOP was not written. Attend to Bolt; retry STOP explicitly.');
+            this.stopWritten = true;
+            // No medal, delivery count or progress is awarded by a timer/write receipt.
+            this.set('review');
+        }
+        catch (error) {
+            this.fail(error, e);
+        }
+    }
+    async pause() {
+        if (this.phase !== 'cruising')
+            return;
+        this.pauseWanted = true;
+        this.set('pausing');
+        this.gate.cancel(); // cancels an unsent rate-wait; never preempts accepted GATT
+        await this.loop;
+    }
+    async parkForPause(e) {
+        if (!this.alive(e))
+            return;
+        const stopped = await this.gate.stop();
+        if (!this.alive(e))
+            return;
+        if (!stopped)
+            throw new Error('Pause STOP was not written. Attend to Bolt before another action.');
+        this.stopWritten = true;
+        this.set('paused');
+    }
+    async resume(nonce) {
+        if (this.phase !== 'paused')
+            return;
+        // The previous loop has completely settled before another pump is created.
+        await this.loop;
+        if (this.phase !== 'paused' || !this.active())
+            return;
+        await this.arm(nonce);
+    }
+    confirm() {
+        if (this.phase !== 'review' || !this.stopWritten || !this.active())
+            throw new Error('Wait for the route to finish, then confirm what you actually observed.');
+        this.confirmed = this.artifact.program.steps.length;
+        this.set('done');
+    }
+    cancel() {
+        this.epoch++;
+        this.pauseWanted = false;
+        if (this.timer)
+            clearTimeout(this.timer);
+        this.timer = null;
+        this.wake?.();
+        this.wake = null;
+        this.gate.cancel();
+        this.set('aborted');
+    }
+    async stop() { this.cancel(); return this.gate.stop(); }
+}

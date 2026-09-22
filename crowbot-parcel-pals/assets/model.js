@@ -1,4 +1,4 @@
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 export const MODULE_ID = 'crowbot-parcel-pals';
 export const PROFILE = 'integem-crowbot-mqtt-v1';
 export const BLOCK_SET = 'parcel-route-v1';
@@ -171,7 +171,7 @@ export function evaluate(raw, m) {
         return { ok: false, message: e.message, trace, program, key: '' };
     }
 }
-export function identity(p, mission) { return JSON.stringify({ blockSet: BLOCK_SET, runtime: 2, mission, steps: p.steps.map(s => s.action), tuning: p.tuning }); }
+export function identity(p, mission) { return JSON.stringify({ blockSet: BLOCK_SET, runtime: 3, mission, steps: p.steps.map(s => s.action), tuning: p.tuning }); }
 /** A routing tag only. Full normalized identity is used for local receipt equality. Not an integrity/security proof. */
 export function tag(key) { let a = 2166136261, b = 5381; for (const c of new TextEncoder().encode(key)) {
     a = Math.imul(a ^ c, 16777619);
@@ -250,13 +250,15 @@ def MQTT(mqtt_msg, voltage):
   except ValueError:
     return 0
   if op == 'a':
-    if _pp_busy or index != 0:
+    if _pp_busy or index < 0 or index >= len(_pp_route):
       return 0
     # Repeated arm must not rewind the route and allow a duplicate movement.
     if _pp_run == token:
       return 0
     _pp_run = token
-    _pp_next = 0
+    # Explicit resume arms a new nonce at the next unsent route index.
+    # It never repeats the last accepted movement.
+    _pp_next = index
     _pp_park()
     return 0
   if _pp_busy:

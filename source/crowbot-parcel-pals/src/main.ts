@@ -1,6 +1,7 @@
 import {MODULE_ID,VERSION,BLOCK_SET,PROFILE,Snapshot,MISSIONS,Mission,Assessment,Progress,Artifact,Action,Tuning,DEFAULT_TUNING,blank,example,parse,evaluate,generate,registerBlocks,toolbox,clone,byteLength,tuning,readProgress,freshProgress,unlocked,ACTION_LABEL,ACTION_ICON,stepWait} from './model.js';
 import {Link,SDK,Context,DataEvent,connectionKey,errorText,Off} from './device.js';
 import {DeliveryRun,CommandGate} from './session.js';
+import {CruiseRun} from './cruise.js';
 import {renderBoard} from './board.js';
 import {DriveInput,keyInput,keyLabel,acceptsInput} from './controls.js';
 import {runtimeCommand} from './runtime.js';
@@ -16,7 +17,7 @@ let lightReceipt='', controlHint='', lastWire='No runtime command sent yet.', la
 let recentNonces:string[]=[];
 let screen='home',visible=true,hostVisible=true,disposed=false,initialized=false,busy=false,attention=false;
 let receipt:{key:string;connection:string;tag:string}|null=null;
-let run:DeliveryRun|null=null,gate:CommandGate|null=null,readCandidate:unknown=null,lastStateKey='',provenance='local-editor';
+let run:DeliveryRun|CruiseRun|null=null,gate:CommandGate|null=null,readCandidate:unknown=null,lastStateKey='',provenance='local-editor';
 let saveTimer:ReturnType<typeof setTimeout>|null=null,saveChain:Promise<void>=Promise.resolve(),pulseEpoch=0,pulseTimer:ReturnType<typeof setTimeout>|null=null,pulseWake:(()=>void)|null=null;
 let confirmAnswer:((value:boolean)=>void)|null=null,focusBefore:HTMLElement|null=null;
 const off:Off[]=[],observers:ResizeObserver[]=[];
@@ -60,7 +61,8 @@ function setScreen(next:string):void{
   if(next==='play')requestAnimationFrame(()=>$('playScreen').focus({preventScroll:true}));
   update();
 }
-function activeRun():boolean{return !!run&&['arming','ready','sending','observe'].includes(run.phase);}
+function activeRun():boolean{return !!run&&['arming','ready','sending','observe','cruising','pausing','paused','finishing','review'].includes(run.phase);}
+function cruiseSelected():boolean{return mission.id>=2&&!$<HTMLInputElement>('guidedHelp').checked;}
 function allowedUiChange():boolean{return !busy&&!link?.operation&&!activeRun()&&!gate?.busy;}
 function checkNow():void{
   const raw=snapshot();assessment=evaluate(raw,mission);draft=clone(raw);
@@ -92,6 +94,7 @@ function paintMission():void{
   $('briefSkill').textContent='DELIVERY '+mission.id+' · '+mission.skill;$('briefTitle').textContent=mission.title;
   $('briefStory').textContent=mission.houses.length===1?`${mission.houses[0].name} is waiting for ${mission.houses[0].parcel}. Can you help Bolt find the way?`:'Milo and Olive both have a parcel waiting. Find the repeating pattern and visit them in order.';
   $('buildSkill').textContent=mission.skill;$('buildTitle').textContent=mission.title;$('hintText').textContent=mission.hint;
+  $('modeChoice').classList.toggle('hidden',mission.id===1);
   renderBoard($('briefBoard'),mission);renderBoard($('buildBoard'),mission);renderBoard($('setupBoard'),mission);fillTuning();renderCards();
 }
 function renderCards():void{
@@ -106,7 +109,7 @@ function renderCards():void{
 }
 async function selectMission(id:number):Promise<void>{
   if(!allowedUiChange())throw new Error('Finish the robot operation first.');if(id>unlocked(progress))throw new Error('Deliver the previous parcel first.');
-  await saveDraft();mission=MISSIONS[id-1];progress.selected=id;receipt=null;lightCheck='idle';lightReceipt='';run=null;readCandidate=null;editorMission=0;protectedDraft=false;
+  await saveDraft();mission=MISSIONS[id-1];progress.selected=id;receipt=null;lightCheck='idle';lightReceipt='';run=null;readCandidate=null;editorMission=0;protectedDraft=false;$<HTMLInputElement>('guidedHelp').checked=false;
   let raw:unknown=null;if(sdk){try{raw=await sdk.storage.get(keyDraft());}catch(e){protectedDraft=true;failure('Load route',e);}}
   if(raw){try{parse(raw);draft=clone(raw) as Snapshot;}catch(e){protectedDraft=true;draft=blank();failure('Saved route left untouched',e);}}else draft=blank();
   if(progressWritable)await store('parcel.v1.progress',progress);paintMission();assessment=evaluate(draft,mission);setScreen('brief');
@@ -132,7 +135,11 @@ function update():void{
   $('lightTest').textContent=lightCheck==='sending'?'Checking…':'3. Blink Bolt’s light';
   set('practiceOpen',ready&&$<HTMLInputElement>('floorReady').checked&&!activeRun());set('practiceClose',!busy&&!gate?.busy);
   $('practicePanel').classList.toggle('hidden',!practice);
-  set('start',ready&&!practice&&$<HTMLInputElement>('floorReady').checked&&$<HTMLInputElement>('startReady').checked);
+  set('start',ready&&!move&&!practice&&$<HTMLInputElement>('floorReady').checked&&$<HTMLInputElement>('startReady').checked);
+  $('start').textContent=cruiseSelected()?'4. Start route cruise →':'4. Open guided delivery →';
+  $('deliveryModeTitle').textContent=cruiseSelected()?'One start. Let your blocks drive.':'First delivery: learn one step at a time.';
+  $('deliveryModeText').textContent=cruiseSelected()?'Watch your uploaded route run from start to finish. No step-by-step Yes buttons. Pause anytime; confirm the whole delivery once at the end. Keep hands away while moving.':'Use the highlighted arrow or Space, then click what you saw. We’ll show you each step before the next movement.';
+  $('floorModeNote').textContent=cruiseSelected()?'Route cruise sends the whole finite route at estimated intervals. An adult must watch and be ready to STOP. The map cannot sense obstacles or drift.':'One short move per tap. Watch Bolt and confirm each step.';
   for(const id of ['testForward','testLeft','testRight','practiceForward','practiceLeft','practiceRight'])set(id,ready&&$<HTMLInputElement>('floorReady').checked);
   set('practiceStop',canHardware()&&!op);set('toolStop',canHardware()&&!op);set('emergencyStop',canHardware()&&!op);set('read',canHardware()&&!op&&!busy&&!move&&!sharedBusy&&!gate?.busy);
   $('cancelRead').classList.toggle('hidden',link?.operation!=='read');
@@ -206,19 +213,30 @@ async function testPulse(action:'forward'|'left'|'right'):Promise<void>{
   }catch(e){attention=true;receipt=null;failure('Robot test',e);}finally{if(pulseTimer)clearTimeout(pulseTimer);pulseTimer=null;pulseWake=null;busy=false;update();}
 }
 async function startRun():Promise<void>{
-  if(!lightVerified()||!canHardware()||busy||attention||practice||!$<HTMLInputElement>('floorReady').checked||!$<HTMLInputElement>('startReady').checked)throw new Error('Upload, check the light, and place Bolt at START first.');
+  if(!lightVerified()||!canHardware()||activeRun()||busy||attention||practice||!$<HTMLInputElement>('floorReady').checked||!$<HTMLInputElement>('startReady').checked)throw new Error('Upload, check the light, and place Bolt at START first.');
   const artifact=generate(snapshot(),mission),expected=receipt!.connection;busy=true;update();
   try{
     await link!.current(expected);if(!lightVerified()||disposed||!visible)throw new Error('The session changed before delivery.');
-    runError='';controlHint='';lastInput='No movement requested yet. Use the highlighted arrow or Space.';
-    gate=newGate(expected);run=new DeliveryRun(artifact,gate,()=>paintRun(),()=>visible&&!disposed&&matches());
+    runError='';controlHint='';lastInput=cruiseSelected()?'Route cruise explicitly started.':'No movement requested yet. Use the highlighted arrow or Space.';
+    gate=newGate(expected);
+    const changed=()=>{
+      if(run instanceof CruiseRun && run.error){attention=true;receipt=null;runError=run.error;}
+      paintRun();
+    };
+    run=cruiseSelected()?new CruiseRun(artifact,gate,changed,()=>visible&&!disposed&&matches()):new DeliveryRun(artifact,gate,changed,()=>visible&&!disposed&&matches());
+    $('playScreen').dataset.mode=run.mode;
+    $('playTitle').textContent=run.mode==='cruise'?'Your code takes the wheel.':'Your route. Your arrow keys.';
     setScreen('play');$('playMission').textContent='DELIVERY '+mission.id+' · '+mission.title;
     await run.begin(nonce());
   }catch(e){attention=true;receipt=null;lightCheck='idle';failure('Start delivery',e);}
   finally{busy=false;update();}
 }
 function paintRun():void{
-  if(!run||screen!=='play'||disposed)return;const i=run.confirmed,p=run.artifact.program,step=p.steps[i],phase=run.phase;
+  if(!run||screen!=='play'||disposed)return;
+  if(run instanceof CruiseRun){paintCruise(run);return;}
+  $('playBoard').style.width='';$('playBoard').style.maxHeight='';
+  $('mapConfirmedLabel').textContent='🚙 Last place you confirmed';$('mapGhostLabel').textContent='◌ Dashed arrow = next planned place';$('mapCaption').textContent='Not live tracking. A sent message does not confirm movement.';
+  const i=run.confirmed,p=run.artifact.program,step=p.steps[i],phase=run.phase;
   const previous=i>0?assessment.trace[i-1]:null,next=assessment.trace[i];
   renderBoard($('playBoard'),mission,{position:previous?.position??mission.start,delivered:previous?.delivered??0,ghost:['sending','observe','ready'].includes(phase)?next?.position:undefined});
   $('stepStrip').replaceChildren();p.steps.forEach((s,n)=>{const el=document.createElement('span');el.className='stepChip'+(n<i?' done':n===i?' current':'');el.textContent=ACTION_ICON[s.action];el.title=ACTION_LABEL[s.action];$('stepStrip').append(el);});
@@ -237,6 +255,56 @@ function paintRun():void{
   $('confirmStep').textContent=action==='deliver'?'Parcel delivered — I saw it ✓':'Yes, I saw it ✓';
   $('runStatus').textContent=phase==='arming'?'Preparing a fresh route session — no motion yet.':phase==='sending'?'Command sent or sending. Wait, then check the real robot.':phase==='observe'?'Your observation is needed. We cannot sense Bolt’s position.':phase==='aborted'?(runError||'Delivery paused/ended. Attend to Bolt, then return to setup.'):phase==='done'?'Finishing your delivery…':'Ready — nothing moves automatically. Press the highlighted arrow, Space, or the big action button.';
 }
+function paintCruise(cruise:CruiseRun):void {
+  const p=cruise.artifact.program,phase=cruise.phase,i=cruise.cursor,total=p.steps.length;
+  const next=assessment.trace[i],last=i>0?assessment.trace[i-1]:null;
+  renderBoard($('playBoard'),mission,{
+    position:cruise.confirmed===total?last?.position:mission.start,
+    delivered:cruise.confirmed===total?mission.houses.length:0,
+    ghost:phase==='cruising'||phase==='pausing'?next?.position:last?.position,
+    trace:assessment.trace.slice(0,i)
+  });
+  $('mapConfirmedLabel').textContent='🚙 Start you confirmed';
+  $('mapGhostLabel').textContent='◌ Dashed arrow = program preview, not GPS';
+  $('mapCaption').textContent='Watch the real robot. Preview advances on estimated timing, not sensed position.';
+  $('stepStrip').replaceChildren();
+  p.steps.forEach((step,n)=>{
+    const el=document.createElement('span');el.className='stepChip'+(n<i?' plannedDone':n===i?' current':'');
+    el.textContent=ACTION_ICON[step.action];el.title=ACTION_LABEL[step.action]+(n<i?' · pacing completed, unverified':'');$('stepStrip').append(el);
+  });
+  $('cruiseCount').textContent=`${i} / ${total} route steps`;
+  $<HTMLProgressElement>('cruiseProgress').max=total;$<HTMLProgressElement>('cruiseProgress').value=i;
+  $('cruiseNow').textContent=phase==='cruising'?(p.steps[i]?ACTION_ICON[p.steps[i].action]+' '+ACTION_LABEL[p.steps[i].action]:'Parking…'):phase==='arming'?'Getting ready…':phase==='pausing'?'Pausing after this short action…':phase==='paused'?'Paused — check Bolt.':phase==='finishing'?'Sending final STOP…':phase==='review'?'How did your delivery go?':phase==='done'?'Delivery observed!':'Route stopped';
+  $('cruiseStatus').textContent=phase==='review'?'Route messages and final STOP were written. Did you see the route, delivery lights and final stop? Place paper parcels only after the wheels are stopped.':phase==='paused'?'STOP was written. Resume only if Bolt is still at the expected place and heading; otherwise end and reset.':phase==='aborted'?(runError||cruise.error||'No more moves are scheduled. Attend to Bolt, then return to setup.'):'Your program chooses each step. No clicking needed. Watch from a safe distance; pause if Bolt goes off the route.';
+  $('cruiseSafetyNote').textContent=phase==='pausing'?'An already-accepted move may finish first. Use STOP ROBOT for an immediate stop request.':'The route is not obstacle-aware. Keep hands clear; stopping is not physically acknowledged.';
+  const pause=$('pauseCruise');pause.textContent=phase==='paused'?'▶ Resume route':'Ⅱ Pause';
+  pause.toggleAttribute('disabled',busy||!['cruising','paused'].includes(phase));
+  pause.classList.toggle('hidden',['review','done','aborted'].includes(phase));
+  $('cruiseReview').classList.toggle('hidden',phase!=='review');
+  $('cruiseConfirm').toggleAttribute('disabled',busy||phase!=='review'||!matches());
+  $('cruiseAdjust').toggleAttribute('disabled',busy||phase!=='review');
+  $('cruiseReturn').classList.toggle('hidden',phase!=='aborted');
+  requestAnimationFrame(resizeCruiseMap);
+  $('cruiseShortcut').textContent=phase==='review'?'Confirm once below. Space and Enter will not answer for you.':phase==='paused'?'Space / P to resume · Esc / ↓ to end':'Space / P to pause · Esc / ↓ to end';
+}
+function resizeCruiseMap():void {
+  if(disposed||screen!=='play'||!(run instanceof CruiseRun))return;
+  const board=$('playBoard'),map=board.parentElement!;
+  if(innerHeight<611){board.style.width='';board.style.maxHeight='';return;}
+  let used=0;
+  for(const child of Array.from(map.children))if(child!==board){
+    const css=getComputedStyle(child);used+=child.getBoundingClientRect().height+(parseFloat(css.marginTop)||0)+(parseFloat(css.marginBottom)||0);
+  }
+  const width=Math.floor(Math.min(map.clientWidth,Math.max(120,map.clientHeight-used-8)*mission.width/mission.height));
+  if(Math.abs(board.getBoundingClientRect().width-width)>1)board.style.width=width+'px';
+  board.style.maxHeight='none';
+}
+async function toggleCruisePause():Promise<void> {
+  if(!(run instanceof CruiseRun)||busy||!visible||disposed||!$('modal').classList.contains('hidden'))return;
+  if(run.phase==='cruising')await run.pause();
+  else if(run.phase==='paused')await run.resume(nonce());
+  update();
+}
 function blockedInput(text:string):void{controlHint=text;lastInput=text;if(screen==='play')paintRun();else if(practice)$('practiceStatus').textContent=text;}
 async function routeInput(input:DriveInput):Promise<void>{
   if(screen!=='play'||!visible||disposed||!$('modal').classList.contains('hidden')||!$('tools').classList.contains('hidden'))return;
@@ -244,6 +312,7 @@ async function routeInput(input:DriveInput):Promise<void>{
   if(!run)return;
   if(run.phase==='observe'){blockedInput('First look at Bolt and click Yes, I saw it or No movement. This key does not confirm a step.');return;}
   if(run.phase!=='ready'||busy||gate?.busy){blockedInput('Wait for this action to finish. Extra taps are not queued.');return;}
+  if(run instanceof CruiseRun)return;
   const action=run.artifact.program.steps[run.confirmed]?.action;
   if(!acceptsInput(input,action)){blockedInput('Your program says '+(action?ACTION_LABEL[action]:'finish')+'. Press '+keyLabel(action)+' instead. No command was sent for this key.');return;}
   controlHint='';lastInput='Requested: '+ACTION_LABEL[action!];
@@ -251,13 +320,20 @@ async function routeInput(input:DriveInput):Promise<void>{
 }
 async function drive():Promise<void>{return routeInput('next');}
 function keyboard(e:KeyboardEvent):void{
-  const input=keyInput(e.key);if(!input||e.ctrlKey||e.altKey||e.metaKey||e.isComposing)return;
+  const pauseKey=e.key.toLowerCase()==='p';
+  const input=keyInput(e.key);if((!input&&!pauseKey)||e.ctrlKey||e.altKey||e.metaKey||e.isComposing)return;
   if(!visible||disposed||!$('modal').classList.contains('hidden')||!$('tools').classList.contains('hidden'))return;
   const el=e.target instanceof Element?e.target:null;
   if(el?.closest('input,textarea,select,[contenteditable="true"],.blocklyWidgetDiv,.blocklyDropDownDiv'))return;
   if(screen!=='play'&&!(screen==='setup'&&practice))return;
-  // Prevent native Space/Enter button activation; held arrows must never create a motor stream.
   e.preventDefault();if(e.repeat)return;
+  if(screen==='play'&&run instanceof CruiseRun){
+    if(input==='stop')void stopRobot().catch(err=>failure('Cruise STOP',err));
+    else if(e.key===' '||pauseKey)void toggleCruisePause().catch(err=>failure('Cruise pause',err));
+    // No directional commands and no keyboard-confirmed physical success.
+    return;
+  }
+  if(!input)return;
   if(screen==='play'){void routeInput(input).catch(err=>failure('Keyboard',err));return;}
   if(input==='stop'||input==='next'){void stopRobot().catch(err=>failure('Practice STOP',err));return;}
   if(input==='forward'||input==='left'||input==='right'){
@@ -266,13 +342,13 @@ function keyboard(e:KeyboardEvent):void{
   }
 }
 async function confirmStep():Promise<void>{
-  if(!run)return;controlHint='';lastInput='You confirmed the previous action. Choose the next step.';run.confirm();if(run.phase!=='done')return;
+  if(!run||busy)return;controlHint='';lastInput='You confirmed the previous action. Choose the next step.';run.confirm();if(run.phase!=='done')return;
   busy=true;update();try{
-    const finishedRun=run;const stopped=await gate!.stop();if(!stopped)throw new Error('Finish STOP could not be sent. Attend to Bolt before continuing.');
+    const finishedRun=run;const stopped=finishedRun instanceof CruiseRun&&finishedRun.stopWritten?true:await gate!.stop();if(!stopped)throw new Error('Finish STOP could not be sent. Attend to Bolt before continuing.');
     if(disposed||!visible||run!==finishedRun||finishedRun.phase!=='done'||!matches())throw new Error('The visible delivery session changed before saving. Check Bolt and restart from setup.');
     progress.cleared[mission.id-1]=true;progress.deliveries[mission.id-1]=mission.houses.length;
     if(progressWritable)await store('parcel.v1.progress',progress);
-    await store(`parcel.v1.observed.${mission.id}`,{completedAt:new Date().toISOString(),confirmation:'user-observed',steps:run.confirmed,assisted:progress.assisted[mission.id-1]});
+    await store(`parcel.v1.observed.${mission.id}`,{completedAt:new Date().toISOString(),confirmation:'user-observed',observationScope:run.mode==='cruise'?'whole-route':'per-step',mode:run.mode,steps:run.confirmed,assisted:progress.assisted[mission.id-1]});
     $('resultTitle').textContent=mission.houses.length===1?`${mission.houses[0].name}’s parcel is here!`:'Two friends. Two happy deliveries!';
     $('resultText').textContent='You made a plan, programmed real wheels, and checked what happened. That’s a robot engineer’s delivery!';
     $('resultFriends').replaceChildren();mission.houses.forEach(h=>{const s=document.createElement('div');s.className='friendStamp';s.textContent=h.emoji;const name=document.createElement('small');name.textContent=h.name+' · delivered';s.append(name);$('resultFriends').append(s);});
@@ -321,6 +397,7 @@ function visibilityChanged():void{
   update();
 }
 function bind():void{
+  const mapObserver=new ResizeObserver(resizeCruiseMap);mapObserver.observe($('playBoard').parentElement!);observers.push(mapObserver);
   click('begin',()=>selectMission(progress.selected));click('home',async()=>{if(allowedUiChange()){await saveDraft();setScreen('home');renderCards();}});
   click('briefBack',()=>setScreen('home'));click('build',async()=>{setScreen('build');await ensureEditors();});click('buildBack',()=>setScreen('brief'));click('setupBack',async()=>{setScreen('build');await ensureEditors();});
   click('save',async()=>{if(await saveDraft())say('Your delivery route is saved.');});click('check',()=>checkNow());
@@ -340,6 +417,8 @@ function bind():void{
   click('returnSetup',()=>leaveRun(true));
   click('connect',async()=>{await link?.connect();update();});click('upload',upload);click('start',startRun);click('applyTuning',applyTuning);
   for(const [id,action] of [['testForward','forward'],['testLeft','left'],['testRight','right']] as const)click(id,()=>testPulse(action));
+  listen($('guidedHelp'),'change',()=>update());
+  click('pauseCruise',toggleCruisePause);click('cruiseConfirm',confirmStep);click('cruiseAdjust',()=>leaveRun(true));click('cruiseReturn',()=>leaveRun(true));
   listen($('floorReady'),'change',()=>update());listen($('startReady'),'change',()=>update());
   listen(document,'keydown',keyboard as EventListener);
   click('drive',drive);click('confirmStep',confirmStep);click('notThere',()=>leaveRun(true));click('exitPlay',()=>leaveRun());click('emergencyStop',()=>stopRobot());click('toolStop',()=>stopRobot());
@@ -347,6 +426,7 @@ function bind():void{
   click('nextMission',()=>mission.id<3?selectMission(mission.id+1):setScreen('home'));click('resultHome',()=>{renderCards();setScreen('home');});
   click('noMovement',async()=>{await leaveRun(true);lightCheck='failed';lightReceipt='';$('testStatus').textContent='No movement reported. Recheck the light first. If the light works but wheels do not, check motor power/library and short-action settings with an adult.';update();});
   const openTools=async():Promise<void>=>{
+    if(run instanceof CruiseRun && ['cruising','pausing'].includes(run.phase))await run.pause();
     if(document.fullscreenElement===$('playScreen'))await document.exitFullscreen();
     $('tools').classList.remove('hidden');$('toolsClose').focus();
   };
