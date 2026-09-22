@@ -79,7 +79,7 @@ try {
   await page.waitForFunction(()=>document.querySelector('#codeLabel').textContent.includes('recovered'));
   assert.equal(await page.locator('#start').isDisabled(),true);checks.push('notification readback restores editable Blockly, never treats cached data as device data, re-upload required');
   await upload(page);
-  // Test autopilot supplies only flap inputs; it never changes score, goal or win state.
+  // Autopilot supplies flap input only; never changes score, goal or win state.
   await page.evaluate(async()=>{
     const {Simulation}=await import('/assets/game.js');const update=Simulation.prototype.update;
     Simulation.prototype.update=function(dt){const target=this.pipes.find(p=>p.x+90>175)?.center??245;if(this.running&&this.y>target+20&&this.velocity>0)this.up();return update.call(this,dt);};
@@ -89,7 +89,7 @@ try {
     if(id===3)await page.check('#safety');
     await page.screenshot({path:`test-results/stage-${id}-ready.png`,fullPage:true});
     await page.click('#start');
-    await page.waitForFunction(()=>/Stage cleared|Course complete/.test(document.querySelector('#resultTitle').textContent),null,{timeout:45000});
+    await page.waitForFunction(()=>!document.querySelector('#result').classList.contains('hidden') && /Stage cleared|Course complete/.test(document.querySelector('#resultTitle').textContent),null,{timeout:45000});
     checks.push(`stage ${id}: real game reaches target, priority STOP sent, completion unlocks next lesson`);
   }
   const sends=await page.evaluate(()=>window.__mock.sends.map(x=>x.text));
