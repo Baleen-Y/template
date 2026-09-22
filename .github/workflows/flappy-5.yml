@@ -1,0 +1,84 @@
+name: Build and verify Pip and Bolt v5
+on:
+  push:
+    branches: [flappy-ble-v5]
+    paths: ['source/flappy-ble/**', '.github/workflows/flappy-5.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: flappy-5-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply the reviewed source delta exactly once
+        run: |
+          python3 - <<'PY'
+          import pathlib,base64,lzma,hashlib,subprocess
+          folder=pathlib.Path('.github/flappy-v5-delta')
+          if folder.exists():
+            files=sorted(folder.glob('*.txt'))
+            assert len(files)==5
+            patch=lzma.decompress(base64.b64decode(''.join(p.read_text().strip() for p in files),validate=True))
+            assert hashlib.sha256(patch).hexdigest()=='8f6a48c9c850b88220e93ff08a7231171b764dae33454894226196da6c81488b'
+            for line in patch.decode().splitlines():
+              if line.startswith('+++ b/'):
+                path=line[6:]
+                assert path.startswith('source/flappy-ble/') and '..' not in pathlib.PurePosixPath(path).parts
+            pathlib.Path('/tmp/flappy-v5.patch').write_bytes(patch)
+            subprocess.run(['git','apply','--check','/tmp/flappy-v5.patch'],check=True)
+            subprocess.run(['git','apply','/tmp/flappy-v5.patch'],check=True)
+          PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked development dependencies
+        working-directory: source/flappy-ble
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Compile production TypeScript and preserve all local resources
+        working-directory: source/flappy-ble
+        run: npm run build
+      - name: Test real generator, device protocol, heart and star simulation
+        working-directory: source/flappy-ble
+        run: |
+          mkdir -p test-results
+          set -o pipefail
+          npm test | tee test-results/core.tap
+      - name: Install test browser
+        working-directory: source/flappy-ble
+        run: npx playwright install --with-deps chromium
+      - name: Test child workflow and full-window gameplay with mocked SDK
+        working-directory: source/flappy-ble
+        run: npm run test:browser
+      - name: Test local resource paths and Blockly dragging
+        working-directory: source/flappy-ble
+        run: npm run test:media
+      - name: Package only after all checks pass
+        working-directory: source/flappy-ble
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: node --experimental-strip-types package-release.ts
+      - name: Commit the tested release and complete editable source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A flappy-ble source/flappy-ble
+          git add downloads/flappy-ble-5.0.0.zip
+          git rm -r --ignore-unmatch .github/flappy-v5-delta
+          git diff --cached --quiet || git commit -m "Release Pip and Bolt 5.0.0: child-first learning and full-window play"
+          git push origin HEAD:${{ github.ref_name }}
+          git archive --format=zip --output=flappy-v5-tested-source.zip HEAD source/flappy-ble flappy-ble .github/workflows
+      - name: Keep screenshots, test reports and exact release ZIP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flappy-v5-release-evidence
+          path: |
+            source/flappy-ble/test-results
+            downloads/flappy-ble-5.0.0.zip
+            flappy-v5-tested-source.zip
+          retention-days: 30
