@@ -1,0 +1,93 @@
+name: Build and verify Crowbot Parcel Pals
+on:
+  push:
+    branches: [crowbot-parcel-pals-v1]
+    paths: ['source/crowbot-parcel-pals/**', '.github/parcel-pals-source/**', '.github/workflows/parcel-pals.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: parcel-pals-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize reviewed TypeScript source once
+        run: |
+          python3 - <<'PY'
+          import pathlib,json,lzma,base64,hashlib
+          folder=pathlib.Path('.github/parcel-pals-source')
+          if folder.exists():
+            parts=sorted(folder.glob('*.txt'))
+            assert len(parts)==4
+            raw=lzma.decompress(base64.b64decode(''.join(p.read_text().strip() for p in parts),validate=True))
+            assert hashlib.sha256(raw).hexdigest()=='5aa44d9c2fa5ce7542f86039e435566d57fa7e0d1e939c265db6114838f069a9'
+            files=json.loads(raw)
+            assert len(files)==17
+            for name,text in files.items():
+              path=pathlib.Path(name)
+              assert name.startswith('source/crowbot-parcel-pals/') and not path.is_absolute() and '..' not in path.parts
+              assert isinstance(text,str)
+              path.parent.mkdir(parents=True,exist_ok=True)
+              path.write_text(text,encoding='utf-8')
+            lock=json.loads(pathlib.Path('source/flappy-ble/package-lock.json').read_text())
+            lock['name']='crowbot-parcel-pals'
+            lock['version']='1.0.0'
+            lock['packages']['']['name']='crowbot-parcel-pals'
+            lock['packages']['']['version']='1.0.0'
+            pathlib.Path('source/crowbot-parcel-pals/package-lock.json').write_text(json.dumps(lock,indent=2)+'\n')
+          PY
+      - name: Bundle the unchanged local Blockly runtime in the new module
+        run: |
+          mkdir -p crowbot-parcel-pals/assets
+          cp -a flappy-ble/assets/vendor crowbot-parcel-pals/assets/
+          cp flappy-ble/LICENSE.blockly.txt crowbot-parcel-pals/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned development dependencies
+        working-directory: source/crowbot-parcel-pals
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Strict TypeScript build
+        working-directory: source/crowbot-parcel-pals
+        run: npm run build
+      - name: Production generator, observation gate and BLE protocol tests
+        working-directory: source/crowbot-parcel-pals
+        run: |
+          mkdir -p test-results
+          set -o pipefail
+          npm test | tee test-results/core.tap
+      - name: Install test browser
+        working-directory: source/crowbot-parcel-pals
+        run: npx playwright install --with-deps chromium
+      - name: Real Blockly and physical-route UI with an explicitly mocked SDK
+        working-directory: source/crowbot-parcel-pals
+        run: npm run test:browser
+      - name: Package the tested independent module
+        working-directory: source/crowbot-parcel-pals
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: node --experimental-strip-types package-release.ts
+      - name: Commit only tested release and complete editable source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A crowbot-parcel-pals source/crowbot-parcel-pals
+          git add downloads/crowbot-parcel-pals-1.0.0.zip
+          git rm -r --ignore-unmatch .github/parcel-pals-source
+          git diff --cached --quiet || git commit -m "Release Crowbot Parcel Pals 1.0.0: real-floor robot route adventures"
+          git push origin HEAD:${{ github.ref_name }}
+          git archive --format=zip --output=parcel-pals-tested-source.zip HEAD source/crowbot-parcel-pals crowbot-parcel-pals .github/workflows/parcel-pals.yml
+      - name: Keep actual checks, screenshots and release ZIP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parcel-pals-release-evidence
+          path: |
+            source/crowbot-parcel-pals/test-results
+            downloads/crowbot-parcel-pals-1.0.0.zip
+            parcel-pals-tested-source.zip
+          retention-days: 30
