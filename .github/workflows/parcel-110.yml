@@ -2,7 +2,7 @@ name: Verify Parcel Pals 1.1 controls
 on:
   push:
     branches: [parcel-pals-1.1]
-    paths: ['source/crowbot-parcel-pals/**', '.github/workflows/parcel-110.yml']
+    paths: ['source/crowbot-parcel-pals/**', '.github/workflows/parcel-110.yml', '.github/parcel110-fixes.py']
   workflow_dispatch:
 permissions:
   contents: write
@@ -43,6 +43,7 @@ jobs:
               assert digest(new.encode())==item['after'],name
               path.parent.mkdir(parents=True,exist_ok=True);path.write_text(new,encoding='utf-8')
           PY
+          if test -f .github/parcel110-fixes.py; then python3 .github/parcel110-fixes.py; fi
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -75,7 +76,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A crowbot-parcel-pals source/crowbot-parcel-pals
           git add downloads/crowbot-parcel-pals-1.1.0.zip
-          git rm -r --ignore-unmatch .github/parcel110-delta
+          git rm -r --ignore-unmatch .github/parcel110-delta .github/parcel110-fixes.py
           if git diff --cached --name-only | grep -E '(^|/)(node_modules|test-results)(/|$)|\.(ttf|woff2?|otf)$'; then
             echo 'Unexpected dependency/test/font content staged'; exit 1
           fi
