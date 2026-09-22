@@ -10,7 +10,7 @@ let sdk: SDK | null = null, context: Context | null = null, link: Link | null = 
 let student: any = null, sample: any = null, game: GameView | null = null;
 let progress: Progress = freshProgress(), stage: Stage = STAGES[0], assessment: Check = check(blank(), stage);
 let loading = true, disposed = false, visible = true, localBusy = false, protectedDraft = false;
-let editorReady = false, progressWritable = true;
+let editorReady = false, progressWritable = true, recoveredKey = '';
 let mode: 'idle' | 'starting' | 'running' | 'finishing' = 'idle';
 let receipt: { stage: number; key: string; connection: string } | null = null;
 let roundConnection = '', lastConnection = '', stopFault = false;
@@ -77,7 +77,7 @@ function assess(): void {
   for (const item of assessment.lines) {
     const p = document.createElement('p'); p.className = item.ok ? 'pass' : 'pending'; p.textContent = `${item.ok ? '✓' : '○'} ${item.text}`; checks.append(p);
   }
-  $('codeLabel').textContent = 'Generated from your device blocks';
+  $('codeLabel').textContent = recoveredKey && recoveredKey === assessment.key ? 'Generated from recovered blocks — not downloaded Python' : 'Generated from your device blocks';
   refresh();
 }
 function uploaded(): boolean { return !!receipt && assessment.ok && receipt.stage === stage.id && receipt.key === assessment.key && receipt.connection === connectionKey(link?.state ?? null); }
@@ -151,7 +151,7 @@ async function selectStage(id: number): Promise<void> {
   try {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     if (editorReady) await persist();
-    stage = STAGES[id - 1]; progress.selected = id; receipt = null; winTicket = null;
+    stage = STAGES[id - 1]; progress.selected = id; receipt = null; winTicket = null; recoveredKey = '';
     protectedDraft = false; $('result').classList.add('hidden'); $('readResult').classList.add('hidden');
     $('help').removeAttribute('open'); $('hint').textContent = stage.hint; $('title').textContent = `${id}. ${stage.name}`;
     $('skill').textContent = stage.skill; $('effect').textContent = stage.effect;
@@ -187,7 +187,7 @@ async function replaceEditor(kind: 'copy' | 'reset' | 'backup'): Promise<void> {
   try {
     await backupCurrent('before-' + kind); protectedDraft = false;
     if (kind === 'copy') progress.assisted[stage.id - 1] = true;
-    loadEditor(target); await persist(); $('readResult').classList.add('hidden');
+    recoveredKey = ''; loadEditor(target); await persist(); $('readResult').classList.add('hidden');
     status(kind === 'copy' ? 'Example copied. Read it, check it, and upload this stage before playing.' : 'Editor restored. Upload again after completing the lesson blocks.');
   } finally { localBusy = false; refresh(); }
 }
@@ -237,7 +237,7 @@ async function applyRead(): Promise<void> {
   if (!await ask('Replace your current stage editor with the workspace read from the device? Current edits are backed up.')) return;
   localBusy = true; refresh();
   try {
-    await backupCurrent('before-device-readback'); protectedDraft = false; loadEditor(recovered); await persist();
+    await backupCurrent('before-device-readback'); protectedDraft = false; loadEditor(recovered); recoveredKey = assessment.key; await persist();
     $('codeLabel').textContent = 'Generated from recovered blocks — not downloaded Python';
     $('readResult').classList.add('hidden'); status('Recovered blocks are editable. Check and upload them for this stage before playing.');
   } finally { localBusy = false; refresh(); }
@@ -322,7 +322,7 @@ function interrupt(reason: string): void {
 }
 function onData(e: DataEvent): void {
   if (!$<HTMLInputElement>('showHex').checked || !visible || e.projectSessionId !== link?.state?.projectSessionId || e.connectionId !== link?.state?.currentDevice?.connectionId) return;
-  $('hex').textContent = e.data.slice(0, 96).map(n => n.toString(16).padStart(2, '0')).join(' ').toUpperCase();
+  $('hex').textContent = e.data.slice(0, 96).map(n => n.toString(16).padStart(2, '0').toUpperCase()).join(' ');
 }
 function listen(id: string, fn: () => unknown): void {
   $(id).addEventListener('click', () => { void Promise.resolve().then(fn).catch(e => fail(id, e)); }, { signal: listeners.signal });
