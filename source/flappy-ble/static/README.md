@@ -1,4 +1,4 @@
-# Flappy BLE — Three-stage Quest 4.0.0
+# Flappy BLE — Three-stage Quest 4.0.1
 
 A directly importable iCreator module. Device Blockly programs the physical Crowbot; it is not a browser game-block interpreter.
 
@@ -63,3 +63,10 @@ Course keys are separate: `course.v4.progress`, `course.v4.stage.1/2/3`, `course
 For development in `source/flappy-ble`: `npm install` (or `npm ci` once the checked-in lock exists), `npm run build`, `npm test`, then `npx playwright install chromium` and `npm run test:browser`. Node 22 is used for TypeScript build/test tooling. The GitHub workflow compiles, runs production-code unit/protocol tests, tests the actual bundled Blockly in headless Chromium with an explicitly mocked iCreator SDK, and only then commits the built release on the feature branch.
 
 Local checks include strict TypeScript compilation, production generator/Python syntax checks, exact upload/readback payload loops, parser failure/timeout cases, priority-STOP queue pressure, progress ordering and actual game simulation goals. Browser-test evidence is written by the workflow, not assumed. Physical Crowbot and the actual iCreator App/web module containers remain untested here. See `VERIFICATION.md` in a CI-built release and the workflow logs for the exact checks/environment. No host module-kit validator was available in this repository.
+
+
+## 4.0.1 import packaging fix
+
+The previous ZIP included Blockly legacy Windows cursor assets (.cur), which the iCreator importer rejected. The build now cleans the media directory and copies only PNG/SVG images. Unused audio and GIF files are omitted because the editor has sounds disabled. Eight legacy cursor URL declarations in the pinned Blockly 8.0.0 bundle are replaced with native grab/grabbing/no-drop cursors; original license notices are retained.
+
+A release-path policy and negative regression tests reject unsupported files, duplicates and symlinks before ZIP delivery. This is a conservative module-owned packaging check, not the unavailable official host validator. The curriculum, stage drafts, progress keys, upload/readback and priority STOP behavior are unchanged.

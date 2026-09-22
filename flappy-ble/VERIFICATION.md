@@ -1,8 +1,8 @@
-# Verification — Flappy BLE 4.0.0
+# Verification — Flappy BLE 4.0.1
 
-Source commit: c0c1ae3eafb025ab0983c655a239aa0c5b5ac27e
+Source commit: 1d33fcec1a64c547b469dfec048dcd85d3c30d46
 
-Strict TypeScript build and production-code unit/protocol tests completed successfully.
+Strict TypeScript build and production unit/protocol/packaging tests passed.
 
 Browser: 140.0.7339.186
 
@@ -24,5 +24,9 @@ headless Chromium; real Blockly 8; mocked iCreator SDK; no real hardware/host/GP
 - hidden module initiates no BLE sends
 - zero uncaught browser errors and zero external runtime network requests
 - missing-SDK state explains how to open module and disables hardware play
+- actual Blockly renders and drags with PNG/SVG-only media
+- native grab and delete cursors
+- no .cur requests or injected cursor URLs
+- zero failed asset requests and uncaught browser errors
 
-Actual iCreator desktop/web host, physical BLE hardware and real-GPU compatibility: NOT TESTED. No host module-kit validator is present in this repository.
+The reported .cur rejection is covered by a negative regression test. Every final ZIP member is checked against a conservative local path/extension policy. Actual iCreator App/web import, official module-kit validator and physical BLE hardware: NOT TESTED.

@@ -1,4 +1,4 @@
-export const VERSION = '4.0.0';
+export const VERSION = '4.0.1';
 export const PROFILE = 'integem-crowbot-mqtt-v1';
 export const BLOCK_SET = 'flappy-crowbot-device';
 export const MAX_DRAFT = 64 * 1024;
