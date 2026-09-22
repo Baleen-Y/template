@@ -1,7 +1,7 @@
 name: Build and test Flappy course
 on:
   push:
-    branches: [flappy-ble-v4]
+    branches: [flappy-ble-v4, flappy-ble-import-fix]
     paths: ['source/flappy-ble/**', '.github/workflows/flappy-course.yml']
   workflow_dispatch:
 permissions:
@@ -21,10 +21,10 @@ jobs:
       - name: Install pinned development dependencies
         working-directory: source/flappy-ble
         run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Compile the real TypeScript release
+      - name: Compile TypeScript and enforce clean resource packaging
         working-directory: source/flappy-ble
         run: npm run build
-      - name: Unit, generator and protocol mock tests
+      - name: Unit, protocol and import-path regression tests
         working-directory: source/flappy-ble
         run: |
           mkdir -p test-results
@@ -33,41 +33,64 @@ jobs:
       - name: Install test browser
         working-directory: source/flappy-ble
         run: npx playwright install --with-deps chromium
-      - name: Real Blockly browser tests with mocked iCreator SDK
+      - name: Real Blockly course tests with mocked SDK
         working-directory: source/flappy-ble
         run: npm run test:browser
-      - name: Record verification and package
+      - name: Cursor and resource-loading regression test
+        working-directory: source/flappy-ble
+        run: npm run test:media
+      - name: Record evidence, package and validate every ZIP member
         env:
           SOURCE_COMMIT: ${{ github.sha }}
         run: |
           python3 - <<'PY'
-          import json, os, pathlib, zipfile
+          import json, os, pathlib, zipfile, stat
+          root=pathlib.Path('flappy-ble')
+          manifest=json.loads((root/'module.json').read_text())
+          version=manifest['version']
           report=json.loads(pathlib.Path('source/flappy-ble/test-results/browser.json').read_text())
-          text='# Verification — Flappy BLE 4.0.0\n\n'
-          text+='Source commit: '+os.environ['SOURCE_COMMIT']+'\n\n'
-          text+='Strict TypeScript build and production-code unit/protocol tests completed successfully.\n\n'
-          text+='Browser: '+report['browser']+'\n\n'+report['mode']+'\n\n'
-          text+='\n'.join('- '+x for x in report['checks'])+'\n\n'
-          text+='Actual iCreator desktop/web host, physical BLE hardware and real-GPU compatibility: NOT TESTED. No host module-kit validator is present in this repository.\n'
-          pathlib.Path('flappy-ble/VERIFICATION.md').write_text(text)
+          media=json.loads(pathlib.Path('source/flappy-ble/test-results/import-media.json').read_text())
+          text='# Verification — Flappy BLE '+version+'\n\nSource commit: '+os.environ['SOURCE_COMMIT']+'\n\n'
+          text+='Strict TypeScript build and production unit/protocol/packaging tests passed.\n\nBrowser: '+report['browser']+'\n\n'+report['mode']+'\n\n'
+          text+='\n'.join('- '+x for x in report['checks']+media['checks'])+'\n\n'
+          text+='The reported .cur rejection is covered by a negative regression test. Every final ZIP member is checked against a conservative local path/extension policy. Actual iCreator App/web import, official module-kit validator and physical BLE hardware: NOT TESTED.\n'
+          (root/'VERIFICATION.md').write_text(text)
           pathlib.Path('downloads').mkdir(exist_ok=True)
-          with zipfile.ZipFile('downloads/flappy-ble-4.0.0.zip','w',zipfile.ZIP_DEFLATED) as z:
-            for p in pathlib.Path('flappy-ble').rglob('*'):
-              if p.is_file(): z.write(p,p.as_posix())
+          archive=pathlib.Path('downloads')/('flappy-ble-'+version+'.zip')
+          allowed={'.html','.js','.css','.json','.md','.txt','.png','.svg'}
+          paths=sorted(p for p in root.rglob('*') if p.is_file())
+          with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
+            for p in paths:
+              assert not p.is_symlink(), p
+              assert p.suffix.lower() in allowed, p
+              z.write(p,p.as_posix())
+          with zipfile.ZipFile(archive) as z:
+            names=z.namelist()
+            assert len(names)==len(set(n.casefold() for n in names))
+            assert 'flappy-ble/module.json' in names and 'flappy-ble/index.html' in names
+            for n in names:
+              parts=n.split('/')
+              assert parts[0]=='flappy-ble' and all(x not in ('','.','..') for x in parts)
+              assert '\\' not in n and ':' not in n and pathlib.PurePosixPath(n).suffix.lower() in allowed
+            assert z.testzip() is None
+          print('ZIP validated:', archive, 'members:', len(names), 'bytes:', archive.stat().st_size)
+          pathlib.Path('source/flappy-ble/test-results/archive.json').write_text(json.dumps({'file':str(archive),'members':names,'bytes':archive.stat().st_size},indent=2))
           PY
-      - name: Commit only the tested release
+      - name: Commit tested source stamps and release
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add flappy-ble downloads/flappy-ble-4.0.0.zip source/flappy-ble/package-lock.json
-          git diff --cached --quiet || git commit -m "Build verified Flappy BLE 4.0.0 release"
+          VERSION=$(node -p "require('./source/flappy-ble/package.json').version")
+          git add -A flappy-ble
+          git add "downloads/flappy-ble-${VERSION}.zip" source/flappy-ble/package-lock.json source/flappy-ble/src/model.ts source/flappy-ble/static
+          git diff --cached --quiet || git commit -m "Build import-safe Flappy BLE ${VERSION} release"
           git push origin HEAD:${{ github.ref_name }}
-      - name: Keep test evidence and release package
+      - name: Keep tests and the exact release ZIP
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flappy-course-evidence
+          name: flappy-import-fix-evidence
           path: |
             source/flappy-ble/test-results
-            downloads/flappy-ble-4.0.0.zip
+            downloads/flappy-ble-4.0.1.zip
           retention-days: 30
