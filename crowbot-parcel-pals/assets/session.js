@@ -1,4 +1,5 @@
 import { stepWait } from './model.js';
+import { runtimeCommand } from './runtime.js';
 /** No command backlog. STOP invalidates any selected command still waiting for its rate slot. */
 export class CommandGate {
     constructor(write, active, interval = 160) {
@@ -86,14 +87,14 @@ export class DeliveryRun {
     async begin(runId) {
         if (this.phase !== 'idle')
             throw new Error('Start a fresh run from the launch page.');
-        if (!/^[a-zA-Z0-9_-]{8,40}$/.test(runId))
+        if (!/^[a-f0-9]{6}$/.test(runId))
             throw new Error('Invalid run identifier.');
         this.runId = runId;
         this.confirmed = 0;
         const e = ++this.epoch;
         this.set('arming');
         try {
-            await this.gate.send(`pp:${this.artifact.tag}:arm:${runId}:0`);
+            await this.gate.send(runtimeCommand(this.artifact.tag, 'a', runId));
             if (e === this.epoch && this.active())
                 this.set('ready');
         }
@@ -111,7 +112,7 @@ export class DeliveryRun {
             throw new Error('No route step remains.');
         this.set('sending');
         try {
-            await this.gate.send(`pp:${this.artifact.tag}:step:${this.runId}:${i}`);
+            await this.gate.send(runtimeCommand(this.artifact.tag, 's', this.runId, i));
             if (e !== this.epoch || !this.active())
                 return;
             await new Promise(resolve => { this.wake = resolve; this.timer = setTimeout(resolve, this.timing(step.action)); });

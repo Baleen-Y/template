@@ -2,6 +2,8 @@ import { MODULE_ID, VERSION, BLOCK_SET, PROFILE, MISSIONS, DEFAULT_TUNING, blank
 import { Link, connectionKey, errorText } from './device.js';
 import { DeliveryRun, CommandGate } from './session.js';
 import { renderBoard } from './board.js';
+import { keyInput, keyLabel, acceptsInput } from './controls.js';
+import { runtimeCommand } from './runtime.js';
 const $ = (id) => { const e = document.getElementById(id); if (!e)
     throw new Error('Missing interface element: ' + id); return e; };
 const B = window.Blockly;
@@ -9,6 +11,9 @@ let sdk = null, context = null, link = null;
 let mission = MISSIONS[0], progress = freshProgress(), draft = blank(), assessment = evaluate(draft, mission);
 let student = null, sample = null, editorMission = 0, loading = false, protectedDraft = false, progressWritable = true;
 let blocksRegistered = false, gateKey = '', runError = '';
+let lightCheck = 'idle', practice = false;
+let lightReceipt = '', controlHint = '', lastWire = 'No runtime command sent yet.', lastInput = 'No movement requested yet.';
+let recentNonces = [];
 let screen = 'home', visible = true, hostVisible = true, disposed = false, initialized = false, busy = false, attention = false;
 let receipt = null;
 let run = null, gate = null, readCandidate = null, lastStateKey = '', provenance = 'local-editor';
@@ -98,6 +103,10 @@ function setScreen(next) {
         window.scrollTo({ top: 0, behavior: 'instant' });
     if (next === 'build')
         requestAnimationFrame(() => resizeEditors());
+    if (next !== 'setup')
+        practice = false;
+    if (next === 'play')
+        requestAnimationFrame(() => $('playScreen').focus({ preventScroll: true }));
     update();
 }
 function activeRun() { return !!run && ['arming', 'ready', 'sending', 'observe'].includes(run.phase); }
@@ -106,8 +115,11 @@ function checkNow() {
     const raw = snapshot();
     assessment = evaluate(raw, mission);
     draft = clone(raw);
-    if (receipt && receipt.key !== assessment.key)
+    if (receipt && receipt.key !== assessment.key) {
         receipt = null;
+        lightCheck = 'idle';
+        lightReceipt = '';
+    }
     $('feedback').textContent = assessment.message;
     $('checkTitle').textContent = assessment.ok ? 'That route works!' : 'One thing to try';
     $('check').closest('.checkBar')?.classList.toggle('good', assessment.ok);
@@ -136,6 +148,8 @@ function loadWorkspace(raw) {
         loading = false;
     }
     receipt = null;
+    lightCheck = 'idle';
+    lightReceipt = '';
     protectedDraft = false;
     checkNow();
     fillTuning();
@@ -229,6 +243,8 @@ async function selectMission(id) {
     mission = MISSIONS[id - 1];
     progress.selected = id;
     receipt = null;
+    lightCheck = 'idle';
+    lightReceipt = '';
     run = null;
     readCandidate = null;
     editorMission = 0;
@@ -263,6 +279,7 @@ async function selectMission(id) {
     setScreen('brief');
 }
 function matches() { return !!receipt && assessment.ok && receipt.key === assessment.key && receipt.connection === connectionKey(link?.state ?? null); }
+function lightVerified() { return lightCheck === 'passed' && matches() && lightReceipt === receipt.key + '|' + receipt.connection; }
 function canHardware() { return !!link && visible && !disposed && link.state?.currentDevice?.profileId === PROFILE; }
 function update() {
     if (disposed)
@@ -284,18 +301,31 @@ function update() {
     set('upload', canHardware() && assessment.ok && !protectedDraft && !busy && !op && !sharedBusy && !move && !gate?.busy);
     set('cancelUpload', !!link?.job);
     $('cancelUpload').classList.toggle('hidden', !link?.job);
-    const ready = matches() && canHardware() && !busy && !op && !sharedBusy && !attention && !gate?.busy;
-    set('start', ready && $('floorReady').checked && $('startReady').checked);
-    for (const id of ['testForward', 'testLeft', 'testRight'])
+    const uploaded = matches() && canHardware() && !busy && !op && !sharedBusy && !attention && !gate?.busy;
+    const ready = uploaded && lightVerified();
+    set('lightTest', uploaded && !practice);
+    set('lightYes', lightCheck === 'observe' && uploaded);
+    set('lightNo', lightCheck === 'observe' && uploaded);
+    $('lightResponse').classList.toggle('hidden', lightCheck !== 'observe');
+    $('lightTrouble').classList.toggle('hidden', lightCheck !== 'failed');
+    $('lightResult').textContent = lightCheck === 'sending' ? 'Sending light check — watch Bolt, no wheels will start.' : lightCheck === 'observe' ? 'The write returned. Did Bolt actually blink twice?' : lightCheck === 'passed' ? '✓ You saw Bolt blink. Ready for short driving commands.' : lightCheck === 'failed' ? 'You reported no light response. Do not start driving; check the uploaded program first.' : 'After upload, click Blink Bolt to check the program before driving.';
+    $('lightTest').textContent = lightCheck === 'sending' ? 'Checking…' : '3. Blink Bolt’s light';
+    set('practiceOpen', ready && $('floorReady').checked && !activeRun());
+    set('practiceClose', !busy && !gate?.busy);
+    $('practicePanel').classList.toggle('hidden', !practice);
+    set('start', ready && !practice && $('floorReady').checked && $('startReady').checked);
+    for (const id of ['testForward', 'testLeft', 'testRight', 'practiceForward', 'practiceLeft', 'practiceRight'])
         set(id, ready && $('floorReady').checked);
+    set('practiceStop', canHardware() && !op);
     set('toolStop', canHardware() && !op);
     set('emergencyStop', canHardware() && !op);
     set('read', canHardware() && !op && !busy && !move && !sharedBusy && !gate?.busy);
     $('cancelRead').classList.toggle('hidden', link?.operation !== 'read');
     if (screen === 'setup' && !busy) {
-        $('uploadNotice').textContent = attention ? 'Attend to Bolt. Send STOP before starting another run.' : !current ? 'Connect your Crowbot. Your blocks never move it on their own.' : sharedBusy ? 'The shared robot is busy in another operation.' : !assessment.ok ? 'Go back and finish a valid route.' : matches() ? 'Route upload acknowledged. Test your floor scale, reset to START, then begin.' : 'Upload this route and wheel settings before playing. This replaces the current device program.';
+        $('uploadNotice').textContent = attention ? 'Attend to Bolt. Send STOP before starting another run.' : !current ? 'Connect your Crowbot. Your blocks never move it on their own.' : sharedBusy ? 'The shared robot is busy in another operation.' : !assessment.ok ? 'Go back and finish a valid route.' : matches() ? (lightVerified() ? 'You saw the light check. Reset Bolt to START, then enter delivery controls.' : 'Route upload acknowledged. Next: click Blink Bolt’s light, then tell us what you saw.') : 'Upload this route and wheel settings before playing. This replaces the current device program.';
     }
     $('deviceInfo').textContent = link ? `Profile: ${current?.profileId ?? 'none'} · ${link.operation || 'idle'} · module ${MODULE_ID} v${VERSION}` : 'Open this module in iCreator for device operations.';
+    $('runtimeWire').textContent = lastWire;
     if (screen === 'play')
         paintRun();
 }
@@ -317,6 +347,8 @@ async function applyTuning() {
     else
         draft.blocks.blocks[0].data = JSON.stringify(t);
     receipt = null;
+    lightCheck = 'idle';
+    lightReceipt = '';
     $('startReady').checked = false;
     checkNow();
     await saveDraft();
@@ -328,8 +360,10 @@ async function upload() {
         return;
     const artifact = generate(snapshot(), mission), expected = connectionKey(link.state);
     receipt = null;
+    lightCheck = 'idle';
+    lightReceipt = '';
+    practice = false;
     busy = true;
-    attention = false;
     $('uploadProgress').setAttribute('value', '0');
     $('uploadNotice').textContent = 'Sending the exact route and matching blocks. Keep the host open…';
     update();
@@ -344,6 +378,7 @@ async function upload() {
         if (!visible || disposed || expected !== connectionKey(link.state) || artifact.key !== assessment.key)
             throw new Error('The route, connection or visible session changed. A new upload is required.');
         receipt = { key: artifact.key, connection: expected, tag: artifact.tag };
+        attention = false;
         $('uploadProgress').setAttribute('value', '100');
         await store(`parcel.v1.upload.${mission.id}`, { ...metadata('uploaded-to-device'), key: artifact.key, tag: artifact.tag, confirmation: result });
         say('The host acknowledged upload. Test the real robot; no movement or position was verified by this app.');
@@ -361,25 +396,96 @@ function newGate(expected) {
     if (!link)
         throw new Error('Connect your Crowbot first.');
     gateKey = expected;
-    return new CommandGate(text => link.send(text, expected), () => visible && !disposed && !!link && connectionKey(link.state) === expected);
+    return new CommandGate(async (text) => {
+        lastWire = 'Sending ' + text + ' (' + byteLength(text) + ' bytes)…';
+        $('runtimeWire').textContent = lastWire;
+        try {
+            await link.send(text, expected);
+            lastWire = 'Write returned: ' + text + ' (' + byteLength(text) + ' bytes). Physical execution is unconfirmed.';
+        }
+        catch (e) {
+            lastWire = 'Not sent / write failed: ' + errorText(e);
+            throw e;
+        }
+        finally {
+            if (!disposed) {
+                $('runtimeWire').textContent = lastWire;
+                if (screen === 'play')
+                    paintRun();
+            }
+        }
+    }, () => visible && !disposed && !!link && connectionKey(link.state) === expected);
 }
-const nonce = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), n => n.toString(16).padStart(2, '0')).join('');
+const nonce = () => {
+    let value = '';
+    do {
+        value = Array.from(crypto.getRandomValues(new Uint8Array(3)), n => n.toString(16).padStart(2, '0')).join('');
+    } while (recentNonces.includes(value));
+    recentNonces.push(value);
+    if (recentNonces.length > 128)
+        recentNonces.shift();
+    return value;
+};
+async function testLight() {
+    if (!matches() || !canHardware() || busy || activeRun() || gate?.busy || practice)
+        return;
+    const artifact = generate(snapshot(), mission), expected = receipt.connection, key = receipt.key, e = ++pulseEpoch;
+    gate = newGate(expected);
+    lightCheck = 'sending';
+    lightReceipt = '';
+    busy = true;
+    update();
+    try {
+        await gate.send(runtimeCommand(artifact.tag, 't', nonce(), 3));
+        if (e !== pulseEpoch || !visible || disposed || !matches())
+            return;
+        await new Promise(resolve => { pulseWake = resolve; pulseTimer = setTimeout(resolve, 1100); });
+        if (e === pulseEpoch && visible && !disposed && matches() && receipt?.key === key && receipt?.connection === expected)
+            lightCheck = 'observe';
+    }
+    catch (e) {
+        lightCheck = 'failed';
+        failure('Light check', e);
+    }
+    finally {
+        if (pulseTimer)
+            clearTimeout(pulseTimer);
+        pulseTimer = null;
+        pulseWake = null;
+        busy = false;
+        if (lightCheck === 'sending')
+            lightCheck = 'idle';
+        update();
+    }
+}
+function observeLight(yes) {
+    if (lightCheck !== 'observe' || !matches() || busy)
+        return;
+    lightCheck = yes ? 'passed' : 'failed';
+    lightReceipt = yes ? receipt.key + '|' + receipt.connection : '';
+    say(yes ? 'You observed the light check. Press an arrow in Practice, or enter the delivery.' : 'You reported no light. A successful upload/write does not prove this program ran. Re-upload, check power/firmware, and retry the light check.');
+    update();
+}
 async function testPulse(action) {
-    if (!matches() || !canHardware() || busy || !$('floorReady').checked)
+    if (!lightVerified() || !canHardware() || busy || gate?.busy || !$('floorReady').checked)
         throw new Error('Upload these settings and confirm the clear-floor supervision first.');
     const artifact = generate(snapshot(), mission), expected = receipt.connection, e = ++pulseEpoch;
     gate = newGate(expected);
     busy = true;
+    $('startReady').checked = false;
     update();
     try {
         const code = ['forward', 'left', 'right'].indexOf(action);
         $('testStatus').textContent = 'Watch Bolt. One bounded test action is being sent…';
-        await gate.send(`pp:${artifact.tag}:test:${code}:${nonce()}`);
+        $('practiceStatus').textContent = 'Sending one short ' + action + ' movement…';
+        await gate.send(runtimeCommand(artifact.tag, 't', nonce(), code));
         if (e !== pulseEpoch || !visible)
             return;
         await new Promise(resolve => { pulseWake = resolve; pulseTimer = setTimeout(resolve, stepWait(action, artifact.program.tuning)); });
-        if (e === pulseEpoch && visible)
+        if (e === pulseEpoch && visible) {
             $('testStatus').textContent = 'Test command sent. Did the real move fit one square / a quarter-turn? Adjust, upload, and test again if needed.';
+            $('practiceStatus').textContent = 'Write returned. Observe the real ' + action + ' action. Release the key before another tap; reset Bolt to START before delivery.';
+        }
     }
     catch (e) {
         attention = true;
@@ -396,22 +502,32 @@ async function testPulse(action) {
     }
 }
 async function startRun() {
-    if (!matches() || !canHardware() || busy || attention || !$('floorReady').checked || !$('startReady').checked)
-        throw new Error('Build, upload, test your floor scale, and reset Bolt to START first.');
-    const artifact = generate(snapshot(), mission);
-    await link.current(receipt.connection);
-    runError = '';
-    gate = newGate(receipt.connection);
-    run = new DeliveryRun(artifact, gate, () => paintRun(), () => visible && !disposed && matches());
-    setScreen('play');
-    $('playMission').textContent = 'DELIVERY ' + mission.id + ' · ' + mission.title;
+    if (!lightVerified() || !canHardware() || busy || attention || practice || !$('floorReady').checked || !$('startReady').checked)
+        throw new Error('Upload, check the light, and place Bolt at START first.');
+    const artifact = generate(snapshot(), mission), expected = receipt.connection;
+    busy = true;
+    update();
     try {
+        await link.current(expected);
+        if (!lightVerified() || disposed || !visible)
+            throw new Error('The session changed before delivery.');
+        runError = '';
+        controlHint = '';
+        lastInput = 'No movement requested yet. Use the highlighted arrow or Space.';
+        gate = newGate(expected);
+        run = new DeliveryRun(artifact, gate, () => paintRun(), () => visible && !disposed && matches());
+        setScreen('play');
+        $('playMission').textContent = 'DELIVERY ' + mission.id + ' · ' + mission.title;
         await run.begin(nonce());
     }
     catch (e) {
         attention = true;
         receipt = null;
+        lightCheck = 'idle';
         failure('Start delivery', e);
+    }
+    finally {
+        busy = false;
         update();
     }
 }
@@ -429,25 +545,99 @@ function paintRun() {
     const action = step?.action, coord = next ? String.fromCharCode(65 + next.position.x) + (next.position.y + 1) : '';
     $('actionText').textContent = action === 'forward' ? `Bolt plans to reach ${coord}. Watch the real wheels, not just the map.` : action === 'left' || action === 'right' ? 'Bolt will turn in place. Check its heading against the dashed arrow.' : action === 'deliver' ? `Help place the parcel at ${mission.houses[next?.delivered ? next.delivered - 1 : 0]?.name ?? 'your friend'}’s house. The robot will flash its delivery signal.` : 'Bolt parks at the end of your route.';
     $('drive').toggleAttribute('disabled', phase !== 'ready' || busy);
+    $('drive').textContent = phase === 'sending' ? 'Sending — please wait…' : step ? ACTION_ICON[step.action] + ' ' + ACTION_LABEL[step.action] + ' · ' + keyLabel(step.action) : 'Route ended';
+    $('keyHint').textContent = controlHint || (phase === 'ready' ? 'Your turn: press ' + keyLabel(action) + '. This runs the next step you programmed.' : phase === 'observe' ? 'Look at Bolt, then CLICK Yes or No below. Arrow keys and Space do not confirm movement.' : phase === 'sending' ? 'One short action only — held keys and extra taps do not queue moves.' : '');
+    $('inputStatus').textContent = lastInput;
+    $('wireStatus').textContent = lastWire;
+    for (const [id, act] of [['routeForward', 'forward'], ['routeLeft', 'left'], ['routeRight', 'right']]) {
+        $(id).toggleAttribute('disabled', phase !== 'ready' || busy);
+        $(id).classList.toggle('suggested', phase === 'ready' && action === act);
+        $(id).setAttribute('aria-pressed', String(action === act));
+    }
+    $('routeStop').toggleAttribute('disabled', !canHardware() || !!link?.operation);
+    $('returnSetup').classList.toggle('hidden', phase !== 'aborted');
     $('drive').classList.toggle('hidden', phase === 'observe');
     $('observe').classList.toggle('hidden', phase !== 'observe');
     $('observeQuestion').textContent = action === 'deliver' ? 'Did you see the light signal and place the parcel at the house?' : action === 'park' ? 'Are the real wheels stopped and the light off?' : action === 'forward' ? `Did Bolt reach ${coord} and stop?` : 'Did Bolt turn to face the dashed arrow and stop?';
     $('confirmStep').textContent = action === 'deliver' ? 'Parcel delivered — I saw it ✓' : 'Yes, I saw it ✓';
-    $('runStatus').textContent = phase === 'arming' ? 'Preparing a fresh route session — no motion yet.' : phase === 'sending' ? 'Command sent or sending. Wait, then check the real robot.' : phase === 'observe' ? 'Your observation is needed. We cannot sense Bolt’s position.' : phase === 'aborted' ? (runError || 'Delivery paused/ended. Attend to Bolt, then return to setup.') : phase === 'done' ? 'Finishing your delivery…' : 'You choose when the next physical action starts.';
+    $('runStatus').textContent = phase === 'arming' ? 'Preparing a fresh route session — no motion yet.' : phase === 'sending' ? 'Command sent or sending. Wait, then check the real robot.' : phase === 'observe' ? 'Your observation is needed. We cannot sense Bolt’s position.' : phase === 'aborted' ? (runError || 'Delivery paused/ended. Attend to Bolt, then return to setup.') : phase === 'done' ? 'Finishing your delivery…' : 'Ready — nothing moves automatically. Press the highlighted arrow, Space, or the big action button.';
 }
-async function drive() { if (!run)
-    return; try {
-    await run.step();
+function blockedInput(text) { controlHint = text; lastInput = text; if (screen === 'play')
+    paintRun();
+else if (practice)
+    $('practiceStatus').textContent = text; }
+async function routeInput(input) {
+    if (screen !== 'play' || !visible || disposed || !$('modal').classList.contains('hidden') || !$('tools').classList.contains('hidden'))
+        return;
+    if (input === 'stop') {
+        await stopRobot();
+        return;
+    }
+    if (!run)
+        return;
+    if (run.phase === 'observe') {
+        blockedInput('First look at Bolt and click Yes, I saw it or No movement. This key does not confirm a step.');
+        return;
+    }
+    if (run.phase !== 'ready' || busy || gate?.busy) {
+        blockedInput('Wait for this action to finish. Extra taps are not queued.');
+        return;
+    }
+    const action = run.artifact.program.steps[run.confirmed]?.action;
+    if (!acceptsInput(input, action)) {
+        blockedInput('Your program says ' + (action ? ACTION_LABEL[action] : 'finish') + '. Press ' + keyLabel(action) + ' instead. No command was sent for this key.');
+        return;
+    }
+    controlHint = '';
+    lastInput = 'Requested: ' + ACTION_LABEL[action];
+    try {
+        await run.step();
+    }
+    catch (e) {
+        attention = true;
+        receipt = null;
+        lightCheck = 'idle';
+        failure('Drive step', e);
+        update();
+    }
 }
-catch (e) {
-    attention = true;
-    receipt = null;
-    failure('Drive step', e);
-    update();
-} }
+async function drive() { return routeInput('next'); }
+function keyboard(e) {
+    const input = keyInput(e.key);
+    if (!input || e.ctrlKey || e.altKey || e.metaKey || e.isComposing)
+        return;
+    if (!visible || disposed || !$('modal').classList.contains('hidden') || !$('tools').classList.contains('hidden'))
+        return;
+    const el = e.target instanceof Element ? e.target : null;
+    if (el?.closest('input,textarea,select,[contenteditable="true"],.blocklyWidgetDiv,.blocklyDropDownDiv'))
+        return;
+    if (screen !== 'play' && !(screen === 'setup' && practice))
+        return;
+    // Prevent native Space/Enter button activation; held arrows must never create a motor stream.
+    e.preventDefault();
+    if (e.repeat)
+        return;
+    if (screen === 'play') {
+        void routeInput(input).catch(err => failure('Keyboard', err));
+        return;
+    }
+    if (input === 'stop' || input === 'next') {
+        void stopRobot().catch(err => failure('Practice STOP', err));
+        return;
+    }
+    if (input === 'forward' || input === 'left' || input === 'right') {
+        if (busy || gate?.busy) {
+            blockedInput('Wait for this short movement to finish; held keys never repeat.');
+            return;
+        }
+        void testPulse(input).catch(err => { failure('Practice controls', err); $('practiceStatus').textContent = errorText(err); });
+    }
+}
 async function confirmStep() {
     if (!run)
         return;
+    controlHint = '';
+    lastInput = 'You confirmed the previous action. Choose the next step.';
     run.confirm();
     if (run.phase !== 'done')
         return;
@@ -490,6 +680,8 @@ async function stopRobot() {
         throw new Error('Finish/cancel the device transfer first; STOP cannot preempt the host transfer lock.');
     pulseEpoch++;
     pulseWake?.();
+    controlHint = '';
+    lastInput = 'STOP requested; observe the real wheels.';
     run?.cancel();
     const expected = connectionKey(link.state);
     if (!gate || gateKey !== expected) {
@@ -592,6 +784,8 @@ function linkChanged() {
     const own = a?.owner.type === 'module' && (a.owner.id === context?.module.id || a.owner.id === context?.module.instanceId);
     if ((lastStateKey && k !== lastStateKey) || (a?.kind === 'upload' && !own)) {
         receipt = null;
+        lightCheck = 'idle';
+        lightReceipt = '';
         if (activeRun()) {
             run.cancel();
             attention = true;
@@ -601,6 +795,8 @@ function linkChanged() {
     if (activeRun() && a && !own) {
         run.cancel();
         receipt = null;
+        lightCheck = 'idle';
+        lightReceipt = '';
         attention = true;
         say('Another client used the robot. The delivery ended; check Bolt and upload again.');
     }
@@ -612,6 +808,7 @@ function visibilityChanged() {
     link?.setVisible(visible);
     if (!visible) {
         confirmAnswer?.(false);
+        practice = false;
         if (activeRun() || busy || gate?.busy) {
             run?.cancel();
             gate?.cancel();
@@ -619,6 +816,8 @@ function visibilityChanged() {
             pulseWake?.();
             attention = true;
             receipt = null;
+            lightCheck = 'idle';
+            lightReceipt = '';
             status('The module was hidden. Check Bolt, send STOP on return, and upload again.');
         }
     }
@@ -669,6 +868,18 @@ function bind() {
         $('startReady').checked = false;
         setScreen('setup');
     } });
+    click('lightTest', testLight);
+    click('lightYes', () => observeLight(true));
+    click('lightNo', () => observeLight(false));
+    click('practiceOpen', () => { if (!lightVerified() || busy || !$('floorReady').checked)
+        return; practice = true; $('startReady').checked = false; update(); $('practicePanel').scrollIntoView({ block: 'center' }); $('practicePanel').focus({ preventScroll: true }); });
+    click('practiceClose', () => { practice = false; update(); $('startReady').focus(); });
+    for (const [id, act] of [['practiceForward', 'forward'], ['practiceLeft', 'left'], ['practiceRight', 'right']])
+        click(id, () => testPulse(act));
+    click('practiceStop', () => stopRobot());
+    for (const [id, act] of [['routeForward', 'forward'], ['routeLeft', 'left'], ['routeRight', 'right'], ['routeStop', 'stop']])
+        click(id, () => routeInput(act));
+    click('returnSetup', () => leaveRun(true));
     click('connect', async () => { await link?.connect(); update(); });
     click('upload', upload);
     click('start', startRun);
@@ -677,6 +888,7 @@ function bind() {
         click(id, () => testPulse(action));
     listen($('floorReady'), 'change', () => update());
     listen($('startReady'), 'change', () => update());
+    listen(document, 'keydown', keyboard);
     click('drive', drive);
     click('confirmStep', confirmStep);
     click('notThere', () => leaveRun(true));
@@ -694,8 +906,16 @@ function bind() {
     } });
     click('nextMission', () => mission.id < 3 ? selectMission(mission.id + 1) : setScreen('home'));
     click('resultHome', () => { renderCards(); setScreen('home'); });
-    click('toolsOpen', () => { $('tools').classList.remove('hidden'); $('toolsClose').focus(); });
-    click('toolsClose', () => { $('tools').classList.add('hidden'); $('toolsOpen').focus(); });
+    click('noMovement', async () => { await leaveRun(true); lightCheck = 'failed'; lightReceipt = ''; $('testStatus').textContent = 'No movement reported. Recheck the light first. If the light works but wheels do not, check motor power/library and short-action settings with an adult.'; update(); });
+    const openTools = async () => {
+        if (document.fullscreenElement === $('playScreen'))
+            await document.exitFullscreen();
+        $('tools').classList.remove('hidden');
+        $('toolsClose').focus();
+    };
+    click('toolsOpen', openTools);
+    click('playToolsOpen', openTools);
+    click('toolsClose', () => { $('tools').classList.add('hidden'); $(screen === 'play' ? 'playToolsOpen' : 'toolsOpen').focus(); });
     click('disconnect', async () => { await link?.disconnect(); receipt = null; gate = null; update(); });
     click('read', readDevice);
     click('replaceRead', replaceRead);

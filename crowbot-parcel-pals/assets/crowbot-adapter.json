@@ -1,1 +1,52 @@
-{"adapterId":"parcel-crowbot-esp32","adapterVersion":"1.0.0","blockSetId":"parcel-route-v1","generatorVersion":"1.0.0","profileId":"integem-crowbot-mqtt-v1","evidence":"supplied host-supported + firmware-inspected contract; not physical validation","gatt":{"serviceUuid":"00001848-0000-1000-8000-00805f9b34fb","writeCharacteristicUuid":"00002a6e-0000-1000-8000-00805f9b34fb","receiveCharacteristicUuid":"00002a6e-0000-1000-8000-00805f9b34fb","writeMode":"with-response"},"artifact":{"kind":"micropython","entry":"def MQTT(mqtt_msg, voltage):","bodyIndent":2,"workspacePolicy":"replace","firmwarePrepends":"from libs.command import *","firmwareAppends":"two-space-indented return 0","sourceMaxBytes":131072,"workspaceMaxBytes":262144},"wire":{"owner":"iCreator host; unchanged b/m framing","contentChunkBytes":18,"pacingMs":100,"workspaceProgramGapMs":1000,"identicalPacketGapMs":2100,"ack":"upload:ok / upload:error; no business-execution proof"},"runtime":{"messages":"module-generated pp:<program-tag>:arm|step|test:<run-or-action>:<index-or-nonce>; raw stop","stepAck":false,"positionTelemetry":false,"maxMotionMs":1000,"maxMotorSpeed":45,"stepModel":"one explicit action then user observation; no autoplay or automatic retries"},"readback":{"request":"get_device_block_xml","firstByteTimeoutMs":5000,"idleTimeoutMs":5000,"totalTimeoutMs":60000,"maxBytes":262144,"sourceReadback":false,"exclusiveTransaction":false},"metadata":"root standard Blockly data string stores versioned wheel settings; raw workspace JSON is not wrapped"}
+{
+  "adapterId": "parcel-crowbot-esp32",
+  "adapterVersion": "1.1.0",
+  "blockSetId": "parcel-route-v1",
+  "generatorVersion": "1.1.0",
+  "profileId": "integem-crowbot-mqtt-v1",
+  "evidence": "supplied host-supported + firmware-inspected contract; not physical validation",
+  "gatt": {
+    "serviceUuid": "00001848-0000-1000-8000-00805f9b34fb",
+    "writeCharacteristicUuid": "00002a6e-0000-1000-8000-00805f9b34fb",
+    "receiveCharacteristicUuid": "00002a6e-0000-1000-8000-00805f9b34fb",
+    "writeMode": "with-response"
+  },
+  "artifact": {
+    "kind": "micropython",
+    "entry": "def MQTT(mqtt_msg, voltage):",
+    "bodyIndent": 2,
+    "workspacePolicy": "replace",
+    "firmwarePrepends": "from libs.command import *",
+    "firmwareAppends": "two-space-indented return 0",
+    "sourceMaxBytes": 131072,
+    "workspaceMaxBytes": 262144
+  },
+  "wire": {
+    "owner": "iCreator host; unchanged b/m framing",
+    "contentChunkBytes": 18,
+    "pacingMs": 100,
+    "workspaceProgramGapMs": 1000,
+    "identicalPacketGapMs": 2100,
+    "ack": "upload:ok / upload:error; no business-execution proof"
+  },
+  "runtime": {
+    "messages": "module-owned p2 + 8-hex tag + a/s/t + 6-hex nonce + 2-hex index; exactly 19 ASCII bytes; raw stop unchanged",
+    "stepAck": false,
+    "positionTelemetry": false,
+    "maxMotionMs": 1000,
+    "maxMotorSpeed": 45,
+    "stepModel": "one explicit action then user observation; no autoplay or automatic retries",
+    "lightProbe": "t index 3; no motor calls; user observed, no telemetry ACK",
+    "runtimeVersion": 2
+  },
+  "readback": {
+    "request": "get_device_block_xml",
+    "firstByteTimeoutMs": 5000,
+    "idleTimeoutMs": 5000,
+    "totalTimeoutMs": 60000,
+    "maxBytes": 262144,
+    "sourceReadback": false,
+    "exclusiveTransaction": false
+  },
+  "metadata": "root standard Blockly data string stores versioned wheel settings; raw workspace JSON is not wrapped"
+}

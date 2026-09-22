@@ -20,6 +20,7 @@ async function seed(page:any,stored:any={}){
        connect:async()=>{if(f.cancelChooser){f.cancelChooser=false;throw new Error('USER_CANCELED');}f.change({currentDevice:target,status:'connected'});return clone(state);},disconnect:async()=>{f.change({currentDevice:null,status:'disconnected'});},
        send:async(req:any)=>{
          if(f.failSend)throw new Error('BUSY: mock failed write');if(!state.currentDevice||req.connectionId!==state.currentDevice.connectionId)throw new Error('STALE_CONNECTION');if(state.activity)throw new Error('BUSY');
+         if(new TextEncoder().encode(req.text).length>20)throw new Error('Test transport maximum is 20 bytes');
          f.sends.push(clone(req));f.change({activity:{kind:'send',owner:{type:'module',id:'crowbot-parcel-pals'}}});
          if(req.text==='get_device_block_xml'){const bytes=new TextEncoder().encode(JSON.stringify(f.deviceWorkspace));for(let i=0;i<bytes.length;i+=3)readers.forEach(fn=>fn({...target,projectSessionId:'p',sequence:++f.sequence,timestamp:Date.now(),text:'',data:Array.from(bytes.slice(i,i+3))}));}
          await new Promise(r=>setTimeout(r,25));f.change({activity:null});
@@ -36,7 +37,14 @@ const waitScreen=async(n:string)=>page.waitForFunction((x:string)=>document.body
 const student=()=>{};
 async function buildMission(id:number){if(id===1)await page.click('#begin');else await page.click('#nextMission');await waitScreen('brief');await page.click('#build');await waitScreen('build');await page.waitForSelector('#student .blocklyDraggable');}
 async function copy(){await page.locator('#help').evaluate((e:any)=>e.open=true);await page.click('#copyExample');await page.waitForSelector('#modal:not(.hidden)');await page.click('#modalYes');await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#toSetup')!.disabled);}
-async function upload(){await page.click('#upload');await page.waitForFunction(()=>document.querySelector('#uploadNotice')!.textContent!.includes('upload acknowledged'));}
+async function upload(){
+ await page.click('#upload');await page.waitForFunction(()=>document.querySelector('#uploadNotice')!.textContent!.includes('upload acknowledged'));
+ assert.equal(await page.locator('#start').isDisabled(),true);
+ await page.click('#lightTest');await page.waitForSelector('#lightResponse:not(.hidden)');
+ assert.equal(await page.locator('#start').isDisabled(),true);
+ await page.click('#lightYes');
+}
+
 try{
  await seed(page);await page.goto(url);await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#begin')!.disabled);
  assert.equal(await page.locator('#homeScreen').isVisible(),true);assert.equal(await page.locator('#student').isVisible(),false);assert.equal(await page.locator('#tools').isVisible(),false);assert.equal(await page.locator('.missionCard').nth(1).isDisabled(),true);await shot('parcel-home');
@@ -53,11 +61,27 @@ try{
  checks.push('real Blockly blank draft, read-only example, invalid orphan feedback and backed-up rescue copy');
  await page.click('#toSetup');await waitScreen('setup');assert.equal(await page.locator('#start').isDisabled(),true);
  await page.evaluate(()=> (window as any).__mock.cancelChooser=true);await page.click('#connect');await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#connect')!.disabled);await page.click('#connect');await page.waitForFunction(()=>document.querySelector('#connection')!.classList.contains('connected'));await upload();assert.equal(await page.locator('#start').isDisabled(),true);
- checks.push('canceled chooser remains retryable; no moving action on connect/upload; supervision and floor-reset gates');
+ // Explicitly reported probe failure blocks all motion and gives a recovery path.
+ await page.click('#lightTest');await page.waitForSelector('#lightResponse:not(.hidden)');await page.click('#lightNo');assert.equal(await page.locator('#lightTrouble').isVisible(),true);assert.equal(await page.locator('#start').isDisabled(),true);
+ await page.click('#lightTest');await page.waitForSelector('#lightResponse:not(.hidden)');await page.click('#lightYes');
+ checks.push('light-only preflight requires an explicit observation; No reaction blocks motion and gives re-upload guidance');
+ checks.push('canceled chooser remains retryable; upload alone cannot start play; light confirmation, supervision and floor-reset gates');
  const captured=await page.evaluate(()=>(window as any).__mock.uploads.at(-1));assert.equal(captured.artifact.workspacePolicy,'replace');assert.match(captured.artifact.source,/def MQTT/);assert.match(captured.artifact.workspace.blocks.blocks[0].data,/forwardMs/);
- await page.check('#floorReady');await page.locator('#tuningPanel').evaluate((e:any)=>e.open=true);await page.fill('#forwardMs','440');await page.click('#applyTuning');assert.equal(await page.locator('#testForward').isDisabled(),true);assert.equal(await page.locator('#start').isDisabled(),true);await upload();await page.click('#testForward');await page.waitForFunction(()=>document.querySelector('#testStatus')!.textContent!.includes('Test command sent'));assert.ok((await page.evaluate(()=>(window as any).__mock.sends.at(-1).text)).includes(':test:0:'));
+ await page.check('#floorReady');await page.locator('#tuningPanel').evaluate((e:any)=>e.open=true);await page.fill('#forwardMs','440');await page.click('#applyTuning');assert.equal(await page.locator('#testForward').isDisabled(),true);assert.equal(await page.locator('#start').isDisabled(),true);await upload();await page.click('#testForward');await page.waitForFunction(()=>document.querySelector('#testStatus')!.textContent!.includes('Test command sent'));assert.ok((await page.evaluate(()=>(window as any).__mock.sends.at(-1).text)).match(/^p2[a-f0-9]{8}t[a-f0-9]{6}00$/));
  checks.push('wheel timing is serialized in the actual snapshot, changes generated Python, and requires re-upload; bounded explicit calibration test');
- await page.locator('#tuningPanel').evaluate((e:any)=>e.open=false);await page.check('#startReady');assert.equal(await page.locator('#start').isEnabled(),true);await shot('parcel-launch');
+ await page.locator('#tuningPanel').evaluate((e:any)=>e.open=false);
+ await page.click('#practiceOpen');await page.waitForSelector('#practicePanel:not(.hidden)');
+ const fieldCount=await page.evaluate(()=>(window as any).__mock.sends.length);await page.locator('#tuningPanel').evaluate((e:any)=>e.open=true);await page.focus('#forwardMs');await page.keyboard.press('ArrowUp');assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),fieldCount);await page.fill('#forwardMs','440');await page.locator('#tuningPanel').evaluate((e:any)=>e.open=false);await page.focus('#practicePanel');
+
+ for(const [key,code] of [['ArrowUp','00'],['ArrowLeft','01'],['ArrowRight','02']]){
+  const before=await page.evaluate(()=>(window as any).__mock.sends.length);await page.keyboard.press(key);
+  await page.waitForFunction(()=>document.querySelector('#practiceStatus')!.textContent!.startsWith('Write returned'));
+  assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),before+1);
+  assert.ok((await page.evaluate(()=>(window as any).__mock.sends.at(-1).text)).endsWith(code));
+ }
+ await page.keyboard.press('ArrowDown');await page.waitForFunction(()=>(window as any).__mock.sends.at(-1).text==='stop');
+ await page.click('#practiceClose');await page.check('#startReady');
+ checks.push('explicit Practice mode supports forward and both turns by keyboard; Down stops; every test resets the floor-start checkbox');assert.equal(await page.locator('#start').isEnabled(),true);await shot('parcel-launch');
  // True production notification readback, not local saved workspace loading.
  await page.click('#toolsOpen');await page.click('#read');await page.waitForSelector('#readResult:not(.hidden)');await page.click('#replaceRead');await page.click('#modalYes');await waitScreen('build');assert.match(await page.locator('#codeLabel').textContent(),/recovered/);await page.click('#toSetup');await upload();await page.check('#startReady');
  checks.push('actual SDK upload/readback/edit/re-upload paths with fragmented mock notifications; no device-source claim');
@@ -66,17 +90,27 @@ try{
    await page.click('#start');await waitScreen('play');await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#drive')!.disabled);
    const bounds=await page.locator('#playScreen').boundingBox();assert.ok(bounds.width>=1439&&bounds.height>=949);assert.equal(await page.locator('#student').isVisible(),false);
    const cellSizes=await page.locator('#playBoard .tile').evaluateAll((nodes:any[])=>nodes.map(n=>({width:n.getBoundingClientRect().width,height:n.getBoundingClientRect().height})));assert.ok(cellSizes.every((s:any)=>Math.abs(s.width-s.height)<3),'Floor map uses equal square cells');
-   if(mission===1){await page.evaluate(()=>{document.querySelector<HTMLElement>('#playScreen')!.requestFullscreen=()=>Promise.reject(new Error('Denied'));});await page.click('#fullscreen');await shot('parcel-delivery');}
+   if(mission===1){await page.evaluate(()=>{document.querySelector<HTMLElement>('#playScreen')!.requestFullscreen=()=>Promise.reject(new Error('Denied'));});await page.click('#fullscreen');await shot('parcel-controls-ready');}
    const steps=await page.evaluate(async()=>{const m=await import('./assets/model.js');return m.parse((window as any).__mock.deviceWorkspace).steps.length;});
    for(let step=0;step<steps;step++){
-     const before=await page.evaluate(()=>(window as any).__mock.sends.length);await page.click('#drive');await page.waitForSelector('#observe:not(.hidden)');
+     const nextAction=await page.evaluate(async(i:number)=>{const m=await import('./assets/model.js');return m.parse((window as any).__mock.deviceWorkspace).steps[i].action;},step);
+     const key=nextAction==='forward'?'ArrowUp':nextAction==='left'?'ArrowLeft':nextAction==='right'?'ArrowRight':' ';
+     if(mission===1&&step===0){
+       const n=await page.evaluate(()=>(window as any).__mock.sends.length);
+       await page.keyboard.press('ArrowLeft');assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),n);assert.match(await page.locator('#keyHint').innerText(),/program says/);
+       await page.click('#playToolsOpen');await page.keyboard.press('ArrowUp');assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),n);await page.click('#toolsClose');
+     }
+     const before=await page.evaluate(()=>(window as any).__mock.sends.length);
+     await page.keyboard.down(key);await page.keyboard.down(key);await page.keyboard.up(key);
+     await page.waitForSelector('#observe:not(.hidden)');
      assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),before+1);assert.equal(await page.locator('#drive').isVisible(),false);
-     const conf=await page.locator('#stepStrip .done').count();assert.equal(conf,step);await page.waitForTimeout(120);assert.equal(await page.locator('#stepStrip .done').count(),step);
+     const conf=await page.locator('#stepStrip .done').count();assert.equal(conf,step);await page.keyboard.press(' ');await page.keyboard.press('ArrowUp');await page.waitForTimeout(120);assert.equal(await page.locator('#stepStrip .done').count(),step);assert.equal(await page.evaluate(()=>(window as any).__mock.sends.length),before+1);
+     if(mission===1&&step===0)await shot('parcel-controls-observation');
      if(mission===2&&step===3)await shot('parcel-turn-observation');
      await page.click('#confirmStep');if(step+1<steps)await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('#drive')!.disabled);
    }
    await waitScreen('result');assert.equal(await page.evaluate(()=>(window as any).__mock.sends.at(-1).text),'stop');assert.equal(await page.evaluate((i:number)=>(window as any).__mock.stored['parcel.v1.progress'].cleared[i],mission-1),true);
-   checks.push(`mission ${mission}: complete uploaded route, one physical step per click, no progress until user observation, parking and delivery unlock`);
+   checks.push(`mission ${mission}: actual Arrow/Space keyboard completes uploaded route; repeat events cannot queue moves; keyboard cannot confirm observations; parking and unlock verified`);
  }
  await shot('parcel-result');const persisted=await page.evaluate(()=>(window as any).__mock.stored);assert.deepEqual(persisted['parcel.v1.progress'].cleared,[true,true,true]);assert.ok(persisted['parcel.v1.stage.1'].blocks.blocks[0].data.includes('440'));
  // Reopen: no stale upload authorization. Mobile workshop uses tabs.

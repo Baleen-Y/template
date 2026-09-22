@@ -1,4 +1,4 @@
-# Crowbot Parcel Pals 1.0.0
+# Crowbot Parcel Pals 1.1.0
 
 New independent iCreator module `crowbot-parcel-pals`. Flappy BLE is not modified.
 
@@ -44,3 +44,31 @@ Independent module ID and parcel.v1.* storage keys. Does not replace Flappy or d
 Full TypeScript source in source/crowbot-parcel-pals. Node 22, TypeScript 5.8.3, Blockly 8.0.0, Playwright. Installed release has all local dependencies/media and no npm/server/network requirement. Native fullscreen is optional; full-window play does not depend on it. Third-party .cur/GIF/audio retained; sound playback off. Requires the actual updated 2026-09-22 iCreator resource-import host, not just a changed prompt.
 
 Development: npm ci; npm run build; npm test; npx playwright install chromium; npm run test:browser. See VERIFICATION.md for actual test evidence. A contract-derived local browser harness and mocked SDK are NOT actual iCreator App/Web, Blob URL mapping, official module-kit or physical Crowbot certification.
+
+
+## 1.1.0 — clear driving controls and observable preflight
+
+The 1.0.0 delivery screen only bound a Drive button. Arrow keys did not send anything, and Start merely armed the uploaded route. This was a discoverability/input omission, not evidence that the user's Bluetooth stack or System Prompt was broken.
+
+After this module update, **upload the route again**. Existing `parcel.v1.*` progress, backups and Blockly timing data are retained. Old upload receipts are never reused. Flappy remains unchanged.
+
+### Connect → Upload → Blink → Drive
+
+A prominent light-only check appears immediately after upload. Click **Blink Bolt's light**, observe the real robot, then choose **Yes — I saw two blinks** or **No — nothing happened**. Upload acknowledgment and a returned write do NOT automatically pass this check. The check never starts or stops a motor. This observation is scoped to the current program/connection only, not persisted as hardware certification. Reopening, changing the program/settings/connection or an observed foreign upload requires a new upload and check.
+
+A no-light report provides re-upload, correct-device/power and Grown-up tools guidance. If the light responds but wheels do not, check the real motor power/library and short-action settings with an adult; the browser cannot diagnose this from a GATT write. The delivery screen distinguishes **No movement at all** from **Moved, but not to the right place**.
+
+### Two clearly named control contexts
+
+- **Delivery controls:** ↑ executes the next forward block; ← or → executes the matching next turn block. Space/Enter executes any next programmed step, including deliver and park. Wrong-direction input gives a specific cue and sends nothing. The next direction is highlighted. ↑ means forward in the robot's heading, not north on the map. ↓ or Escape requests STOP and ends this run. A movement is never initiated by opening this page.
+- **Try the arrow controls first (optional):** an explicit Practice panel on the setup page permits short forward/left/right tests independent of the route. Arrow keys match the screen pad. Down/Space/Escape request STOP. No mission progress is earned. Each motion clears the START-position checkbox. Close Practice, reposition Bolt and confirm START before delivering.
+
+Each tap is bounded. Key-repeat events and rapid extra taps do not form a motion queue. Keyboard commands are ignored in the Blockly editor, text/number fields, dialogs, Grown-up tools, or hidden pages. Space/Enter cannot silently click the observation Yes button; observations require an explicit on-screen click. A wrong key or waiting state is visible rather than silent.
+
+### Compact commands, unchanged upload/readback
+
+The new module-owned runtime uses exactly 19 ASCII bytes: `p2` + 8-hex program tag + `a/s/t` + 6-hex nonce + 2-hex action index. `a` arms the route without motion, `s` executes an uploaded route step, `t` selects an explicit short test (index 3 is light-only). Plain `stop` is unchanged. The matching generated callback validates these messages. Old verbose runtime packets are rejected by the new callback, so re-upload is mandatory.
+
+This keeps manual game packets below 20 bytes without assuming MTU negotiation. It is a compatibility precaution, not proof that packet truncation caused the user's reported failure. No packet-fragment retries, automatic motor replays or host SDK methods were added. The host still owns original b/m upload and `get_device_block_xml` notification readback. Program tags are routing checks, not authentication/integrity proofs.
+
+The visible command details identify no movement requested, sending, returned GATT write, and failed write. Latest bounded runtime text/length is available in Grown-up tools. No device source/storage dump or raw telemetry is logged automatically.

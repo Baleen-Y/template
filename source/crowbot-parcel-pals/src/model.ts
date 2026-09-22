@@ -1,4 +1,4 @@
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 export const MODULE_ID = 'crowbot-parcel-pals';
 export const PROFILE = 'integem-crowbot-mqtt-v1';
 export const BLOCK_SET = 'parcel-route-v1';
@@ -105,7 +105,7 @@ export function evaluate(raw:unknown,m:Mission):Assessment{
     return {ok:true,message:'Your route reaches every friend. Ready to send to Bolt!',trace,program,key:identity(program,m.id)};
   }catch(e){return {ok:false,message:(e as Error).message,trace,program,key:''};}
 }
-export function identity(p:Program,mission:number):string{return JSON.stringify({blockSet:BLOCK_SET,mission,steps:p.steps.map(s=>s.action),tuning:p.tuning});}
+export function identity(p:Program,mission:number):string{return JSON.stringify({blockSet:BLOCK_SET,runtime:2,mission,steps:p.steps.map(s=>s.action),tuning:p.tuning});}
 /** A routing tag only. Full normalized identity is used for local receipt equality. Not an integrity/security proof. */
 export function tag(key:string):string{let a=2166136261,b=5381;for(const c of new TextEncoder().encode(key)){a=Math.imul(a^c,16777619);b=Math.imul(b,33)^c;}return (a>>>0).toString(16).padStart(8,'0')+(b>>>0).toString(16).padStart(8,'0');}
 export const VOCAB = {lf:'moveup_left',rf:'moveup_right',lb:'movedown_left',rb:'movedown_right',ls:'stopmove_left',rs:'stopmove_right',on:'light_turnon',off:'light_turnoff'};
@@ -152,6 +152,7 @@ def _pp_action(code):
         time.sleep_ms(100)
     elif code == 4:
       ${v.off}()
+
   finally:
     _pp_park()
 
@@ -166,34 +167,51 @@ def MQTT(mqtt_msg, voltage):
     return 0
   if not isinstance(mqtt_msg, str):
     return 0
-  parts = mqtt_msg.split(':')
-  if len(parts) != 5 or parts[0] != 'pp' or parts[1] != '${t}':
+  # p2 + 8-char program tag + operation + 6-char nonce + 2-char index = 19 bytes.
+  if len(mqtt_msg) != 19 or mqtt_msg[:2] != 'p2' or mqtt_msg[2:10] != '${t.slice(0,8)}':
     return 0
-  op = parts[2]
-  if op == 'arm':
-    if _pp_busy or len(parts[3]) < 8 or len(parts[3]) > 40:
+  op = mqtt_msg[10]
+  token = mqtt_msg[11:17]
+  if any(c not in '0123456789abcdef' for c in token):
+    return 0
+  try:
+    index = int(mqtt_msg[17:19], 16)
+  except ValueError:
+    return 0
+  if op == 'a':
+    if _pp_busy or index != 0:
       return 0
-    _pp_run = parts[3]
+    # Repeated arm must not rewind the route and allow a duplicate movement.
+    if _pp_run == token:
+      return 0
+    _pp_run = token
     _pp_next = 0
     _pp_park()
     return 0
   if _pp_busy:
     return 0
-  if op == 'test':
-    if _pp_run or mqtt_msg == _pp_test or parts[3] not in ('0', '1', '2'):
+  if op == 't':
+    if _pp_run or mqtt_msg == _pp_test or index not in (0, 1, 2, 3):
       return 0
     _pp_test = mqtt_msg
     _pp_busy = True
     try:
-      _pp_action(int(parts[3]))
+      if index == 3:
+        # Light-only callback check. Seeing the light is a user's observation, not telemetry.
+        try:
+          for _parcel_flash in range(2):
+            ${v.on}()
+            time.sleep_ms(150)
+            ${v.off}()
+            time.sleep_ms(150)
+        finally:
+          ${v.off}()
+      else:
+        _pp_action(index)
     finally:
       _pp_busy = False
     return 0
-  if op != 'step' or parts[3] != _pp_run or not _pp_run:
-    return 0
-  try:
-    index = int(parts[4])
-  except ValueError:
+  if op != 's' or token != _pp_run or not _pp_run:
     return 0
   if index != _pp_next or index < 0 or index >= len(_pp_route):
     return 0

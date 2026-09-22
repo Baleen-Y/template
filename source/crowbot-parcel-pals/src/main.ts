@@ -2,6 +2,8 @@ import {MODULE_ID,VERSION,BLOCK_SET,PROFILE,Snapshot,MISSIONS,Mission,Assessment
 import {Link,SDK,Context,DataEvent,connectionKey,errorText,Off} from './device.js';
 import {DeliveryRun,CommandGate} from './session.js';
 import {renderBoard} from './board.js';
+import {DriveInput,keyInput,keyLabel,acceptsInput} from './controls.js';
+import {runtimeCommand} from './runtime.js';
 declare global{interface Window{icreator?:SDK;Blockly:any}}
 const $=<T extends HTMLElement=HTMLElement>(id:string):T=>{const e=document.getElementById(id);if(!e)throw new Error('Missing interface element: '+id);return e as T;};
 const B=window.Blockly;
@@ -9,6 +11,9 @@ let sdk:SDK|null=null,context:Context|null=null,link:Link|null=null;
 let mission:Mission=MISSIONS[0],progress:Progress=freshProgress(),draft:Snapshot=blank(),assessment:Assessment=evaluate(draft,mission);
 let student:any=null,sample:any=null,editorMission=0,loading=false,protectedDraft=false,progressWritable=true;
 let blocksRegistered=false,gateKey='',runError='';
+let lightCheck:'idle'|'sending'|'observe'|'passed'|'failed'='idle', practice=false;
+let lightReceipt='', controlHint='', lastWire='No runtime command sent yet.', lastInput='No movement requested yet.';
+let recentNonces:string[]=[];
 let screen='home',visible=true,hostVisible=true,disposed=false,initialized=false,busy=false,attention=false;
 let receipt:{key:string;connection:string;tag:string}|null=null;
 let run:DeliveryRun|null=null,gate:CommandGate|null=null,readCandidate:unknown=null,lastStateKey='',provenance='local-editor';
@@ -51,13 +56,15 @@ function setScreen(next:string):void{
   if(next!=='play'&&document.fullscreenElement===$('playScreen'))void document.exitFullscreen().catch(e=>log('Fullscreen exit: '+errorText(e)));
   if(next!=='play')window.scrollTo({top:0,behavior:'instant'});
   if(next==='build')requestAnimationFrame(()=>resizeEditors());
+  if(next!=='setup')practice=false;
+  if(next==='play')requestAnimationFrame(()=>$('playScreen').focus({preventScroll:true}));
   update();
 }
 function activeRun():boolean{return !!run&&['arming','ready','sending','observe'].includes(run.phase);}
 function allowedUiChange():boolean{return !busy&&!link?.operation&&!activeRun()&&!gate?.busy;}
 function checkNow():void{
   const raw=snapshot();assessment=evaluate(raw,mission);draft=clone(raw);
-  if(receipt&&receipt.key!==assessment.key)receipt=null;
+  if(receipt&&receipt.key!==assessment.key){receipt=null;lightCheck='idle';lightReceipt='';}
   $('feedback').textContent=assessment.message;$('checkTitle').textContent=assessment.ok?'That route works!':'One thing to try';$('check').closest('.checkBar')?.classList.toggle('good',assessment.ok);
   try{$('python').textContent=generate(raw,mission).source;}catch(e){$('python').textContent='# '+errorText(e);}
   const t=assessment.program.tuning;for(const k of ['speed','forwardMs','leftMs','rightMs'] as const)$(<string>k).setAttribute('data-saved',String(t[k]));
@@ -65,7 +72,7 @@ function checkNow():void{
 }
 function loadWorkspace(raw:Snapshot):void{
   loading=true;try{draft=clone(raw);if(student){B.serialization.workspaces.load(raw,student);editorMission=mission.id;}}finally{loading=false;}
-  receipt=null;protectedDraft=false;checkNow();fillTuning();resizeEditors();
+  receipt=null;lightCheck='idle';lightReceipt='';protectedDraft=false;checkNow();fillTuning();resizeEditors();
 }
 function resizeEditors():void{if(!student||screen!=='build')return;B.svgResize(student);B.svgResize(sample);}
 async function ensureEditors():Promise<void>{
@@ -99,12 +106,13 @@ function renderCards():void{
 }
 async function selectMission(id:number):Promise<void>{
   if(!allowedUiChange())throw new Error('Finish the robot operation first.');if(id>unlocked(progress))throw new Error('Deliver the previous parcel first.');
-  await saveDraft();mission=MISSIONS[id-1];progress.selected=id;receipt=null;run=null;readCandidate=null;editorMission=0;protectedDraft=false;
+  await saveDraft();mission=MISSIONS[id-1];progress.selected=id;receipt=null;lightCheck='idle';lightReceipt='';run=null;readCandidate=null;editorMission=0;protectedDraft=false;
   let raw:unknown=null;if(sdk){try{raw=await sdk.storage.get(keyDraft());}catch(e){protectedDraft=true;failure('Load route',e);}}
   if(raw){try{parse(raw);draft=clone(raw) as Snapshot;}catch(e){protectedDraft=true;draft=blank();failure('Saved route left untouched',e);}}else draft=blank();
   if(progressWritable)await store('parcel.v1.progress',progress);paintMission();assessment=evaluate(draft,mission);setScreen('brief');
 }
 function matches():boolean{return !!receipt&&assessment.ok&&receipt.key===assessment.key&&receipt.connection===connectionKey(link?.state??null);}
+function lightVerified():boolean{return lightCheck==='passed'&&matches()&&lightReceipt===receipt!.key+'|'+receipt!.connection;}
 function canHardware():boolean{return !!link&&visible&&!disposed&&link.state?.currentDevice?.profileId===PROFILE;}
 function update():void{
   if(disposed)return;const current=link?.state?.currentDevice;const op=!!link?.operation,sharedBusy=!!link?.state?.activity,move=activeRun();
@@ -116,15 +124,23 @@ function update():void{
   set('connect',!!link&&!busy&&!op&&!current);set('disconnect',canHardware()&&!busy&&!op&&!move&&!sharedBusy);
   set('upload',canHardware()&&assessment.ok&&!protectedDraft&&!busy&&!op&&!sharedBusy&&!move&&!gate?.busy);
   set('cancelUpload',!!link?.job);$('cancelUpload').classList.toggle('hidden',!link?.job);
-  const ready=matches()&&canHardware()&&!busy&&!op&&!sharedBusy&&!attention&&!gate?.busy;
-  set('start',ready&&$<HTMLInputElement>('floorReady').checked&&$<HTMLInputElement>('startReady').checked);
-  for(const id of ['testForward','testLeft','testRight'])set(id,ready&&$<HTMLInputElement>('floorReady').checked);
-  set('toolStop',canHardware()&&!op);set('emergencyStop',canHardware()&&!op);set('read',canHardware()&&!op&&!busy&&!move&&!sharedBusy&&!gate?.busy);
+  const uploaded=matches()&&canHardware()&&!busy&&!op&&!sharedBusy&&!attention&&!gate?.busy;
+  const ready=uploaded&&lightVerified();
+  set('lightTest',uploaded&&!practice);set('lightYes',lightCheck==='observe'&&uploaded);set('lightNo',lightCheck==='observe'&&uploaded);
+  $('lightResponse').classList.toggle('hidden',lightCheck!=='observe');$('lightTrouble').classList.toggle('hidden',lightCheck!=='failed');
+  $('lightResult').textContent=lightCheck==='sending'?'Sending light check — watch Bolt, no wheels will start.':lightCheck==='observe'?'The write returned. Did Bolt actually blink twice?':lightCheck==='passed'?'✓ You saw Bolt blink. Ready for short driving commands.':lightCheck==='failed'?'You reported no light response. Do not start driving; check the uploaded program first.':'After upload, click Blink Bolt to check the program before driving.';
+  $('lightTest').textContent=lightCheck==='sending'?'Checking…':'3. Blink Bolt’s light';
+  set('practiceOpen',ready&&$<HTMLInputElement>('floorReady').checked&&!activeRun());set('practiceClose',!busy&&!gate?.busy);
+  $('practicePanel').classList.toggle('hidden',!practice);
+  set('start',ready&&!practice&&$<HTMLInputElement>('floorReady').checked&&$<HTMLInputElement>('startReady').checked);
+  for(const id of ['testForward','testLeft','testRight','practiceForward','practiceLeft','practiceRight'])set(id,ready&&$<HTMLInputElement>('floorReady').checked);
+  set('practiceStop',canHardware()&&!op);set('toolStop',canHardware()&&!op);set('emergencyStop',canHardware()&&!op);set('read',canHardware()&&!op&&!busy&&!move&&!sharedBusy&&!gate?.busy);
   $('cancelRead').classList.toggle('hidden',link?.operation!=='read');
   if(screen==='setup'&&!busy){
-    $('uploadNotice').textContent=attention?'Attend to Bolt. Send STOP before starting another run.':!current?'Connect your Crowbot. Your blocks never move it on their own.':sharedBusy?'The shared robot is busy in another operation.':!assessment.ok?'Go back and finish a valid route.':matches()?'Route upload acknowledged. Test your floor scale, reset to START, then begin.':'Upload this route and wheel settings before playing. This replaces the current device program.';
+    $('uploadNotice').textContent=attention?'Attend to Bolt. Send STOP before starting another run.':!current?'Connect your Crowbot. Your blocks never move it on their own.':sharedBusy?'The shared robot is busy in another operation.':!assessment.ok?'Go back and finish a valid route.':matches()?(lightVerified()?'You saw the light check. Reset Bolt to START, then enter delivery controls.':'Route upload acknowledged. Next: click Blink Bolt’s light, then tell us what you saw.'):'Upload this route and wheel settings before playing. This replaces the current device program.';
   }
   $('deviceInfo').textContent=link?`Profile: ${current?.profileId??'none'} · ${link.operation||'idle'} · module ${MODULE_ID} v${VERSION}`:'Open this module in iCreator for device operations.';
+  $('runtimeWire').textContent=lastWire;
   if(screen==='play')paintRun();
 }
 function currentTuning():Tuning{try{const root=snapshot().blocks.blocks.find(b=>b.type==='parcel_program');return root?.data?tuning(JSON.parse(root.data)):clone(DEFAULT_TUNING);}catch{return clone(DEFAULT_TUNING);}}
@@ -132,42 +148,74 @@ function fillTuning():void{const t=currentTuning();for(const k of ['speed','forw
 async function applyTuning():Promise<void>{
   if(!allowedUiChange())return;const t=tuning({schema:1,speed:Number($<HTMLInputElement>('speed').value),forwardMs:Number($<HTMLInputElement>('forwardMs').value),leftMs:Number($<HTMLInputElement>('leftMs').value),rightMs:Number($<HTMLInputElement>('rightMs').value)});
   if(student)student.getTopBlocks(false).find((b:any)=>b.type==='parcel_program').data=JSON.stringify(t);else draft.blocks.blocks[0].data=JSON.stringify(t);
-  receipt=null;$<HTMLInputElement>('startReady').checked=false;checkNow();await saveDraft();$('testStatus').textContent='New timing saved in your blocks. Upload it, then test again.';update();
+  receipt=null;lightCheck='idle';lightReceipt='';$<HTMLInputElement>('startReady').checked=false;checkNow();await saveDraft();$('testStatus').textContent='New timing saved in your blocks. Upload it, then test again.';update();
 }
 async function upload():Promise<void>{
   if(!link||busy||!assessment.ok)return;
-  const artifact=generate(snapshot(),mission),expected=connectionKey(link.state);receipt=null;busy=true;attention=false;$('uploadProgress').setAttribute('value','0');$('uploadNotice').textContent='Sending the exact route and matching blocks. Keep the host open…';update();
+  const artifact=generate(snapshot(),mission),expected=connectionKey(link.state);receipt=null;lightCheck='idle';lightReceipt='';practice=false;busy=true;$('uploadProgress').setAttribute('value','0');$('uploadNotice').textContent='Sending the exact route and matching blocks. Keep the host open…';update();
   try{
     await saveDraft();const result=await link.upload(artifact.snapshot,artifact.source,expected,(text,p)=>{if(!disposed){$('uploadProgress').setAttribute('value',String(p));$('uploadNotice').textContent=text;}});
     if(result!=='device-confirmed')throw new Error('The host did not report device confirmation. Upload again explicitly before playing.');
     if(!visible||disposed||expected!==connectionKey(link.state)||artifact.key!==assessment.key)throw new Error('The route, connection or visible session changed. A new upload is required.');
-    receipt={key:artifact.key,connection:expected,tag:artifact.tag};$('uploadProgress').setAttribute('value','100');
+    receipt={key:artifact.key,connection:expected,tag:artifact.tag};attention=false;$('uploadProgress').setAttribute('value','100');
     await store(`parcel.v1.upload.${mission.id}`,{...metadata('uploaded-to-device'),key:artifact.key,tag:artifact.tag,confirmation:result});
     say('The host acknowledged upload. Test the real robot; no movement or position was verified by this app.');
   }catch(e){attention=true;failure('Upload: device state may be partial',e);}finally{busy=false;update();}
 }
 function newGate(expected:string):CommandGate{
   if(!link)throw new Error('Connect your Crowbot first.');
-  gateKey=expected;return new CommandGate(text=>link!.send(text,expected),()=>visible&&!disposed&&!!link&&connectionKey(link.state)===expected);
+  gateKey=expected;return new CommandGate(async text=>{
+    lastWire='Sending '+text+' ('+byteLength(text)+' bytes)…';$('runtimeWire').textContent=lastWire;
+    try{await link!.send(text,expected);lastWire='Write returned: '+text+' ('+byteLength(text)+' bytes). Physical execution is unconfirmed.';}
+    catch(e){lastWire='Not sent / write failed: '+errorText(e);throw e;}
+    finally{if(!disposed){$('runtimeWire').textContent=lastWire;if(screen==='play')paintRun();}}
+  },()=>visible&&!disposed&&!!link&&connectionKey(link.state)===expected);
 }
-const nonce=():string=>Array.from(crypto.getRandomValues(new Uint8Array(8)),n=>n.toString(16).padStart(2,'0')).join('');
+const nonce=():string=>{
+  let value='';do{value=Array.from(crypto.getRandomValues(new Uint8Array(3)),n=>n.toString(16).padStart(2,'0')).join('');}while(recentNonces.includes(value));
+  recentNonces.push(value);if(recentNonces.length>128)recentNonces.shift();return value;
+};
+async function testLight():Promise<void>{
+  if(!matches()||!canHardware()||busy||activeRun()||gate?.busy||practice)return;
+  const artifact=generate(snapshot(),mission),expected=receipt!.connection,key=receipt!.key,e=++pulseEpoch;
+  gate=newGate(expected);lightCheck='sending';lightReceipt='';busy=true;update();
+  try{
+    await gate.send(runtimeCommand(artifact.tag,'t',nonce(),3));
+    if(e!==pulseEpoch||!visible||disposed||!matches())return;
+    await new Promise<void>(resolve=>{pulseWake=resolve;pulseTimer=setTimeout(resolve,1100);});
+    if(e===pulseEpoch&&visible&&!disposed&&matches()&&receipt?.key===key&&receipt?.connection===expected)lightCheck='observe';
+  }catch(e){lightCheck='failed';failure('Light check',e);}
+  finally{if(pulseTimer)clearTimeout(pulseTimer);pulseTimer=null;pulseWake=null;busy=false;if(lightCheck==='sending')lightCheck='idle';update();}
+}
+function observeLight(yes:boolean):void{
+  if(lightCheck!=='observe'||!matches()||busy)return;
+  lightCheck=yes?'passed':'failed';lightReceipt=yes?receipt!.key+'|'+receipt!.connection:'';
+  say(yes?'You observed the light check. Press an arrow in Practice, or enter the delivery.':'You reported no light. A successful upload/write does not prove this program ran. Re-upload, check power/firmware, and retry the light check.');update();
+}
+
 async function testPulse(action:'forward'|'left'|'right'):Promise<void>{
-  if(!matches()||!canHardware()||busy||!$<HTMLInputElement>('floorReady').checked)throw new Error('Upload these settings and confirm the clear-floor supervision first.');
-  const artifact=generate(snapshot(),mission),expected=receipt!.connection,e=++pulseEpoch;gate=newGate(expected);busy=true;update();
+  if(!lightVerified()||!canHardware()||busy||gate?.busy||!$<HTMLInputElement>('floorReady').checked)throw new Error('Upload these settings and confirm the clear-floor supervision first.');
+  const artifact=generate(snapshot(),mission),expected=receipt!.connection,e=++pulseEpoch;gate=newGate(expected);busy=true;$<HTMLInputElement>('startReady').checked=false;update();
   try{
     const code=['forward','left','right'].indexOf(action);$('testStatus').textContent='Watch Bolt. One bounded test action is being sent…';
-    await gate.send(`pp:${artifact.tag}:test:${code}:${nonce()}`);
+    $('practiceStatus').textContent='Sending one short '+action+' movement…';
+    await gate.send(runtimeCommand(artifact.tag,'t',nonce(),code));
     if(e!==pulseEpoch||!visible)return;
     await new Promise<void>(resolve=>{pulseWake=resolve;pulseTimer=setTimeout(resolve,stepWait(action,artifact.program.tuning));});
-    if(e===pulseEpoch&&visible)$('testStatus').textContent='Test command sent. Did the real move fit one square / a quarter-turn? Adjust, upload, and test again if needed.';
+    if(e===pulseEpoch&&visible){$('testStatus').textContent='Test command sent. Did the real move fit one square / a quarter-turn? Adjust, upload, and test again if needed.';$('practiceStatus').textContent='Write returned. Observe the real '+action+' action. Release the key before another tap; reset Bolt to START before delivery.';}
   }catch(e){attention=true;receipt=null;failure('Robot test',e);}finally{if(pulseTimer)clearTimeout(pulseTimer);pulseTimer=null;pulseWake=null;busy=false;update();}
 }
 async function startRun():Promise<void>{
-  if(!matches()||!canHardware()||busy||attention||!$<HTMLInputElement>('floorReady').checked||!$<HTMLInputElement>('startReady').checked)throw new Error('Build, upload, test your floor scale, and reset Bolt to START first.');
-  const artifact=generate(snapshot(),mission);await link!.current(receipt!.connection);
-  runError='';gate=newGate(receipt!.connection);run=new DeliveryRun(artifact,gate,()=>paintRun(),()=>visible&&!disposed&&matches());
-  setScreen('play');$('playMission').textContent='DELIVERY '+mission.id+' · '+mission.title;
-  try{await run.begin(nonce());}catch(e){attention=true;receipt=null;failure('Start delivery',e);update();}
+  if(!lightVerified()||!canHardware()||busy||attention||practice||!$<HTMLInputElement>('floorReady').checked||!$<HTMLInputElement>('startReady').checked)throw new Error('Upload, check the light, and place Bolt at START first.');
+  const artifact=generate(snapshot(),mission),expected=receipt!.connection;busy=true;update();
+  try{
+    await link!.current(expected);if(!lightVerified()||disposed||!visible)throw new Error('The session changed before delivery.');
+    runError='';controlHint='';lastInput='No movement requested yet. Use the highlighted arrow or Space.';
+    gate=newGate(expected);run=new DeliveryRun(artifact,gate,()=>paintRun(),()=>visible&&!disposed&&matches());
+    setScreen('play');$('playMission').textContent='DELIVERY '+mission.id+' · '+mission.title;
+    await run.begin(nonce());
+  }catch(e){attention=true;receipt=null;lightCheck='idle';failure('Start delivery',e);}
+  finally{busy=false;update();}
 }
 function paintRun():void{
   if(!run||screen!=='play'||disposed)return;const i=run.confirmed,p=run.artifact.program,step=p.steps[i],phase=run.phase;
@@ -178,14 +226,47 @@ function paintRun():void{
   $('actionIcon').textContent=step?ACTION_ICON[step.action]:'✓';$('actionTitle').textContent=step?ACTION_LABEL[step.action]:'All steps observed';
   const action=step?.action,coord=next?String.fromCharCode(65+next.position.x)+(next.position.y+1):'';
   $('actionText').textContent=action==='forward'?`Bolt plans to reach ${coord}. Watch the real wheels, not just the map.`:action==='left'||action==='right'?'Bolt will turn in place. Check its heading against the dashed arrow.':action==='deliver'?`Help place the parcel at ${mission.houses[next?.delivered?next.delivered-1:0]?.name??'your friend'}’s house. The robot will flash its delivery signal.`:'Bolt parks at the end of your route.';
-  $('drive').toggleAttribute('disabled',phase!=='ready'||busy);$('drive').classList.toggle('hidden',phase==='observe');$('observe').classList.toggle('hidden',phase!=='observe');
+  $('drive').toggleAttribute('disabled',phase!=='ready'||busy);
+  $('drive').textContent=phase==='sending'?'Sending — please wait…':step?ACTION_ICON[step.action]+' '+ACTION_LABEL[step.action]+' · '+keyLabel(step.action):'Route ended';
+  $('keyHint').textContent=controlHint||(phase==='ready'?'Your turn: press '+keyLabel(action)+'. This runs the next step you programmed.':phase==='observe'?'Look at Bolt, then CLICK Yes or No below. Arrow keys and Space do not confirm movement.':phase==='sending'?'One short action only — held keys and extra taps do not queue moves.':'');
+  $('inputStatus').textContent=lastInput;$('wireStatus').textContent=lastWire;
+  for(const [id,act] of [['routeForward','forward'],['routeLeft','left'],['routeRight','right']] as const){$(id).toggleAttribute('disabled',phase!=='ready'||busy);$(id).classList.toggle('suggested',phase==='ready'&&action===act);$(id).setAttribute('aria-pressed',String(action===act));}
+  $('routeStop').toggleAttribute('disabled',!canHardware()||!!link?.operation);
+  $('returnSetup').classList.toggle('hidden',phase!=='aborted');$('drive').classList.toggle('hidden',phase==='observe');$('observe').classList.toggle('hidden',phase!=='observe');
   $('observeQuestion').textContent=action==='deliver'?'Did you see the light signal and place the parcel at the house?':action==='park'?'Are the real wheels stopped and the light off?':action==='forward'?`Did Bolt reach ${coord} and stop?`:'Did Bolt turn to face the dashed arrow and stop?';
   $('confirmStep').textContent=action==='deliver'?'Parcel delivered — I saw it ✓':'Yes, I saw it ✓';
-  $('runStatus').textContent=phase==='arming'?'Preparing a fresh route session — no motion yet.':phase==='sending'?'Command sent or sending. Wait, then check the real robot.':phase==='observe'?'Your observation is needed. We cannot sense Bolt’s position.':phase==='aborted'?(runError||'Delivery paused/ended. Attend to Bolt, then return to setup.'):phase==='done'?'Finishing your delivery…':'You choose when the next physical action starts.';
+  $('runStatus').textContent=phase==='arming'?'Preparing a fresh route session — no motion yet.':phase==='sending'?'Command sent or sending. Wait, then check the real robot.':phase==='observe'?'Your observation is needed. We cannot sense Bolt’s position.':phase==='aborted'?(runError||'Delivery paused/ended. Attend to Bolt, then return to setup.'):phase==='done'?'Finishing your delivery…':'Ready — nothing moves automatically. Press the highlighted arrow, Space, or the big action button.';
 }
-async function drive():Promise<void>{if(!run)return;try{await run.step();}catch(e){attention=true;receipt=null;failure('Drive step',e);update();}}
+function blockedInput(text:string):void{controlHint=text;lastInput=text;if(screen==='play')paintRun();else if(practice)$('practiceStatus').textContent=text;}
+async function routeInput(input:DriveInput):Promise<void>{
+  if(screen!=='play'||!visible||disposed||!$('modal').classList.contains('hidden')||!$('tools').classList.contains('hidden'))return;
+  if(input==='stop'){await stopRobot();return;}
+  if(!run)return;
+  if(run.phase==='observe'){blockedInput('First look at Bolt and click Yes, I saw it or No movement. This key does not confirm a step.');return;}
+  if(run.phase!=='ready'||busy||gate?.busy){blockedInput('Wait for this action to finish. Extra taps are not queued.');return;}
+  const action=run.artifact.program.steps[run.confirmed]?.action;
+  if(!acceptsInput(input,action)){blockedInput('Your program says '+(action?ACTION_LABEL[action]:'finish')+'. Press '+keyLabel(action)+' instead. No command was sent for this key.');return;}
+  controlHint='';lastInput='Requested: '+ACTION_LABEL[action!];
+  try{await run.step();}catch(e){attention=true;receipt=null;lightCheck='idle';failure('Drive step',e);update();}
+}
+async function drive():Promise<void>{return routeInput('next');}
+function keyboard(e:KeyboardEvent):void{
+  const input=keyInput(e.key);if(!input||e.ctrlKey||e.altKey||e.metaKey||e.isComposing)return;
+  if(!visible||disposed||!$('modal').classList.contains('hidden')||!$('tools').classList.contains('hidden'))return;
+  const el=e.target instanceof Element?e.target:null;
+  if(el?.closest('input,textarea,select,[contenteditable="true"],.blocklyWidgetDiv,.blocklyDropDownDiv'))return;
+  if(screen!=='play'&&!(screen==='setup'&&practice))return;
+  // Prevent native Space/Enter button activation; held arrows must never create a motor stream.
+  e.preventDefault();if(e.repeat)return;
+  if(screen==='play'){void routeInput(input).catch(err=>failure('Keyboard',err));return;}
+  if(input==='stop'||input==='next'){void stopRobot().catch(err=>failure('Practice STOP',err));return;}
+  if(input==='forward'||input==='left'||input==='right'){
+    if(busy||gate?.busy){blockedInput('Wait for this short movement to finish; held keys never repeat.');return;}
+    void testPulse(input).catch(err=>{failure('Practice controls',err);$('practiceStatus').textContent=errorText(err);});
+  }
+}
 async function confirmStep():Promise<void>{
-  if(!run)return;run.confirm();if(run.phase!=='done')return;
+  if(!run)return;controlHint='';lastInput='You confirmed the previous action. Choose the next step.';run.confirm();if(run.phase!=='done')return;
   busy=true;update();try{
     const finishedRun=run;const stopped=await gate!.stop();if(!stopped)throw new Error('Finish STOP could not be sent. Attend to Bolt before continuing.');
     if(disposed||!visible||run!==finishedRun||finishedRun.phase!=='done'||!matches())throw new Error('The visible delivery session changed before saving. Check Bolt and restart from setup.');
@@ -201,7 +282,7 @@ async function confirmStep():Promise<void>{
 async function stopRobot():Promise<boolean>{
   if(!canHardware())throw new Error('Cannot send STOP while hidden or disconnected. Use the physical power switch if needed.');
   if(link!.operation)throw new Error('Finish/cancel the device transfer first; STOP cannot preempt the host transfer lock.');
-  pulseEpoch++;pulseWake?.();run?.cancel();
+  pulseEpoch++;pulseWake?.();controlHint='';lastInput='STOP requested; observe the real wheels.';run?.cancel();
   const expected=connectionKey(link!.state);if(!gate||gateKey!==expected){gate?.cancel();gate=newGate(expected);}
   try{const ok=await gate.stop();attention=!ok;if(!ok)throw new Error('STOP was not sent. Use the device power switch if it is moving.');runError='';say('STOP sent — inspect the real wheels. No physical stop acknowledgement exists.');return true;}
   catch(e){attention=true;receipt=null;failure('STOP — retry explicitly or use physical power',e);return false;}finally{update();}
@@ -229,14 +310,14 @@ function linkChanged():void{
   if(!link||disposed)return;const k=connectionKey(link.state),a=link.state?.activity;
   const own=a?.owner.type==='module'&&(a.owner.id===context?.module.id||a.owner.id===context?.module.instanceId);
   if((lastStateKey&&k!==lastStateKey)||(a?.kind==='upload'&&!own)){
-    receipt=null;if(activeRun()){run!.cancel();attention=true;}say('The robot connection/program changed. Upload your route again.');
+    receipt=null;lightCheck='idle';lightReceipt='';if(activeRun()){run!.cancel();attention=true;}say('The robot connection/program changed. Upload your route again.');
   }
-  if(activeRun()&&a&&!own){run!.cancel();receipt=null;attention=true;say('Another client used the robot. The delivery ended; check Bolt and upload again.');}
+  if(activeRun()&&a&&!own){run!.cancel();receipt=null;lightCheck='idle';lightReceipt='';attention=true;say('Another client used the robot. The delivery ended; check Bolt and upload again.');}
   lastStateKey=k;update();
 }
 function visibilityChanged():void{
   visible=hostVisible&&!document.hidden;link?.setVisible(visible);
-  if(!visible){confirmAnswer?.(false);if(activeRun()||busy||gate?.busy){run?.cancel();gate?.cancel();pulseEpoch++;pulseWake?.();attention=true;receipt=null;status('The module was hidden. Check Bolt, send STOP on return, and upload again.');}}
+  if(!visible){confirmAnswer?.(false);practice=false;if(activeRun()||busy||gate?.busy){run?.cancel();gate?.cancel();pulseEpoch++;pulseWake?.();attention=true;receipt=null;lightCheck='idle';lightReceipt='';status('The module was hidden. Check Bolt, send STOP on return, and upload again.');}}
   update();
 }
 function bind():void{
@@ -250,13 +331,27 @@ function bind():void{
   click('copyExample',async()=>{if(await ask('Use the finished example?','Try building it first. This rescue option backs up your work and records that you used a hint. You must still upload and drive the real route.','Use this example')){await backup('before-example');const t=currentTuning();loadWorkspace(example(mission,t));progress.assisted[mission.id-1]=true;if(progressWritable)await store('parcel.v1.progress',progress);await saveDraft();}});
   click('restoreBackup',async()=>{const raw=await sdk?.storage.get('parcel.v1.backup');if(!raw)throw new Error('No local backup yet.');parse(raw);if(await ask('Restore your local backup?','This is saved local work, not a new device read.','Restore backup')){loadWorkspace(raw as Snapshot);provenance='local-backup';await saveDraft();}});
   click('toSetup',async()=>{checkNow();if(assessment.ok){await saveDraft();renderBoard($('setupBoard'),mission);fillTuning();$<HTMLInputElement>('startReady').checked=false;setScreen('setup');}});
+  click('lightTest',testLight);click('lightYes',()=>observeLight(true));click('lightNo',()=>observeLight(false));
+  click('practiceOpen',()=>{if(!lightVerified()||busy||!$<HTMLInputElement>('floorReady').checked)return;practice=true;$<HTMLInputElement>('startReady').checked=false;update();$('practicePanel').scrollIntoView({block:'center'});$('practicePanel').focus({preventScroll:true});});
+  click('practiceClose',()=>{practice=false;update();$('startReady').focus();});
+  for(const [id,act] of [['practiceForward','forward'],['practiceLeft','left'],['practiceRight','right']] as const)click(id,()=>testPulse(act));
+  click('practiceStop',()=>stopRobot());
+  for(const [id,act] of [['routeForward','forward'],['routeLeft','left'],['routeRight','right'],['routeStop','stop']] as const)click(id,()=>routeInput(act));
+  click('returnSetup',()=>leaveRun(true));
   click('connect',async()=>{await link?.connect();update();});click('upload',upload);click('start',startRun);click('applyTuning',applyTuning);
   for(const [id,action] of [['testForward','forward'],['testLeft','left'],['testRight','right']] as const)click(id,()=>testPulse(action));
   listen($('floorReady'),'change',()=>update());listen($('startReady'),'change',()=>update());
+  listen(document,'keydown',keyboard as EventListener);
   click('drive',drive);click('confirmStep',confirmStep);click('notThere',()=>leaveRun(true));click('exitPlay',()=>leaveRun());click('emergencyStop',()=>stopRobot());click('toolStop',()=>stopRobot());
   click('fullscreen',async()=>{try{if(document.fullscreenElement=== $('playScreen'))await document.exitFullscreen();else await $('playScreen').requestFullscreen();}catch(e){say('Native fullscreen is unavailable; the delivery view still fills this module window.');}});
   click('nextMission',()=>mission.id<3?selectMission(mission.id+1):setScreen('home'));click('resultHome',()=>{renderCards();setScreen('home');});
-  click('toolsOpen',()=>{$('tools').classList.remove('hidden');$('toolsClose').focus();});click('toolsClose',()=>{$('tools').classList.add('hidden');$('toolsOpen').focus();});
+  click('noMovement',async()=>{await leaveRun(true);lightCheck='failed';lightReceipt='';$('testStatus').textContent='No movement reported. Recheck the light first. If the light works but wheels do not, check motor power/library and short-action settings with an adult.';update();});
+  const openTools=async():Promise<void>=>{
+    if(document.fullscreenElement===$('playScreen'))await document.exitFullscreen();
+    $('tools').classList.remove('hidden');$('toolsClose').focus();
+  };
+  click('toolsOpen',openTools);click('playToolsOpen',openTools);
+  click('toolsClose',()=>{$('tools').classList.add('hidden');$(screen==='play'?'playToolsOpen':'toolsOpen').focus();});
   click('disconnect',async()=>{await link?.disconnect();receipt=null;gate=null;update();});click('read',readDevice);click('replaceRead',replaceRead);click('keepRead',()=>{$('readResult').classList.add('hidden');readCandidate=null;});
   click('cancelRead',()=>link?.cancelRead());click('cancelUpload',async()=>{if(await ask('Cancel the device upload?','The host will disconnect the shared robot. Some blocks/code may already have changed. Cancellation is not rollback.','Cancel and disconnect'))await link?.cancelUpload();});
   click('modalYes',()=>confirmAnswer?.(true));click('modalNo',()=>confirmAnswer?.(false));

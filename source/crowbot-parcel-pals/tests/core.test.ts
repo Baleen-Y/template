@@ -1,3 +1,4 @@
+import {runtimeCommand} from '../src/runtime.ts';
 import {test} from 'node:test';import assert from 'node:assert/strict';import {spawnSync} from 'node:child_process';
 import {MISSIONS,example,blank,parse,evaluate,generate,clone,tuning,DEFAULT_TUNING,VOCAB,readProgress,freshProgress,tag} from '../../../crowbot-parcel-pals/assets/model.js';
 import {CommandGate,DeliveryRun} from '../../../crowbot-parcel-pals/assets/session.js';
@@ -25,7 +26,7 @@ test('lesson three really requires repeats, not just a matching flattened path',
 });
 test('Python executes changed vocabulary and guards wrong program/run/index/replays',()=>{
  const m=MISSIONS[2],a=generate(example(m),m,{...VOCAB,lf:'classroom_forward_left'});
- const harness=`import sys,types,json\nevents=[]\nt=types.ModuleType('time')\nt.sleep_ms=lambda ms:events.append(['wait',ms])\nsys.modules['time']=t\nns={}\nfor name in ${JSON.stringify([...Object.values(VOCAB),'classroom_forward_left'])}:\n ns[name]=(lambda n:lambda *args:events.append([n,*args]))(name)\nexec(${JSON.stringify(a.source+'\n  return 0\n')},ns)\nf=ns['MQTT']\nf('pp:wrong:step:abcdef12:0',3)\nassert not events\nf('pp:${a.tag}:arm:abcdef12:0',3)\nevents.clear()\nf('pp:${a.tag}:step:wrongRun:0',3)\nassert not events\nf('pp:${a.tag}:step:abcdef12:1',3)\nassert not events\nf('pp:${a.tag}:step:abcdef12:0',3)\nassert ['classroom_forward_left',30] in events\nassert events[-2:]==[['stopmove_left',0],['stopmove_right',0]]\nevents.clear()\nf('pp:${a.tag}:step:abcdef12:0',3)\nassert not events\nf('stop',3)\nevents.clear()\nf('pp:${a.tag}:step:abcdef12:1',3)\nassert not events\nprint('guarded')\n`;
+ const harness=`import sys,types,json\nevents=[]\nt=types.ModuleType('time')\nt.sleep_ms=lambda ms:events.append(['wait',ms])\nsys.modules['time']=t\nns={}\nfor name in ${JSON.stringify([...Object.values(VOCAB),'classroom_forward_left'])}:\n ns[name]=(lambda n:lambda *args:events.append([n,*args]))(name)\nexec(${JSON.stringify(a.source+'\n  return 0\n')},ns)\nf=ns['MQTT']\nf('pp:wrong:step:abcdef12:0',3)\nassert not events\nf('${runtimeCommand(a.tag,'a','abcdef')}',3)\nevents.clear()\nf('${runtimeCommand(a.tag,'s','123456')}',3)\nassert not events\nf('${runtimeCommand(a.tag,'s','abcdef',1)}',3)\nassert not events\nf('${runtimeCommand(a.tag,'s','abcdef',0)}',3)\nassert ['classroom_forward_left',30] in events\nassert events[-2:]==[['stopmove_left',0],['stopmove_right',0]]\nevents.clear()\nf('${runtimeCommand(a.tag,'s','abcdef',0)}',3)\nassert not events\nf('stop',3)\nevents.clear()\nf('${runtimeCommand(a.tag,'s','abcdef',1)}',3)\nassert not events\nprint('guarded')\n`;
  const r=spawnSync('python3',['-c',harness],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/guarded/);
 });
 test('device cleanup still attempts right stop when left stop raises',()=>{
@@ -33,11 +34,11 @@ test('device cleanup still attempts right stop when left stop raises',()=>{
  const r=spawnSync('python3',['-c',h],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);
 });
 test('40 rapid step clicks produce one command and no observation-based progress',async()=>{
- const sent:string[]=[],a=generate(example(MISSIONS[0]),MISSIONS[0]);const g=new CommandGate(async t=>{sent.push(t);await tick();},()=>true,0);const r=new DeliveryRun(a,g,()=>{},()=>true,()=>1);await r.begin('abcdefgh');
+ const sent:string[]=[],a=generate(example(MISSIONS[0]),MISSIONS[0]);const g=new CommandGate(async t=>{sent.push(t);await tick();},()=>true,0);const r=new DeliveryRun(a,g,()=>{},()=>true,()=>1);await r.begin('abcdef');
  const results=await Promise.allSettled(Array.from({length:40},()=>r.step()));assert.equal(results.filter(x=>x.status==='fulfilled').length,1);assert.equal(sent.length,2);assert.equal(r.confirmed,0);assert.equal(r.phase,'observe');r.confirm();assert.equal(r.confirmed,1);
 });
 test('delivery progress is earned only by explicit observations; no automatic next step',async()=>{
- const a=generate(example(MISSIONS[0]),MISSIONS[0]),sent:string[]=[];const r=new DeliveryRun(a,new CommandGate(async t=>{sent.push(t);},()=>true,0),()=>{},()=>true,()=>0);assert.throws(()=>r.confirm());await r.begin('abcdefgh');for(let i=0;i<a.program.steps.length;i++){await r.step();assert.equal(r.confirmed,i);assert.equal(sent.length,i+2);r.confirm();}assert.equal(r.phase,'done');
+ const a=generate(example(MISSIONS[0]),MISSIONS[0]),sent:string[]=[];const r=new DeliveryRun(a,new CommandGate(async t=>{sent.push(t);},()=>true,0),()=>{},()=>true,()=>0);assert.throws(()=>r.confirm());await r.begin('abcdef');for(let i=0;i<a.program.steps.length;i++){await r.step();assert.equal(r.confirmed,i);assert.equal(sent.length,i+2);r.confirm();}assert.equal(r.phase,'done');
 });
 test('STOP invalidates a rate-waiting command; nothing ordinary follows it',async()=>{
  const sent:string[]=[],g=new CommandGate(async t=>{sent.push(t);},()=>true,40);await g.send('arm');const p=g.send('move');const stop=g.stop();await assert.rejects(p);await stop;assert.deepEqual(sent,['arm','stop']);
@@ -47,7 +48,7 @@ test('STOP follows only the accepted write, cannot be buried in input backlog',a
 });
 test('failed stop is not automatically replayed',async()=>{let n=0;const g=new CommandGate(async()=>{n++;throw new Error('BUSY');},()=>true,0);await assert.rejects(g.stop());await tick();assert.equal(n,1);await assert.rejects(g.stop());assert.equal(n,2);});
 test('hiding during step cooldown cancels without hidden sends or later observations',async()=>{
- let visible=true;const sent:string[]=[],a=generate(example(MISSIONS[0]),MISSIONS[0]);const r=new DeliveryRun(a,new CommandGate(async t=>{sent.push(t);},()=>visible,0),()=>{},()=>visible,()=>50);await r.begin('abcdefgh');const p=r.step();await tick();visible=false;r.cancel();await p;assert.equal(r.phase,'aborted');assert.throws(()=>r.confirm());assert.equal(sent.length,2);
+ let visible=true;const sent:string[]=[],a=generate(example(MISSIONS[0]),MISSIONS[0]);const r=new DeliveryRun(a,new CommandGate(async t=>{sent.push(t);},()=>visible,0),()=>{},()=>visible,()=>50);await r.begin('abcdef');const p=r.step();await tick();visible=false;r.cancel();await p;assert.equal(r.phase,'aborted');assert.throws(()=>r.confirm());assert.equal(sent.length,2);
 });
 test('readback streaming accepts split Unicode and rejects mixed telemetry',async()=>{
  const raw=JSON.stringify({...example(MISSIONS[0]),note:'🐰'}),bytes=new TextEncoder().encode(raw),r=new ReadSession('key',{deviceId:'d',connectionId:'c'},'p');for(let i=0;i<bytes.length;i++)r.feed({deviceId:'d',connectionId:'c',projectSessionId:'p',sequence:i,timestamp:0,text:'',data:[bytes[i]]});assert.equal((await r.promise).raw,raw);
